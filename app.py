@@ -22,13 +22,13 @@ from langgraph.graph import StateGraph, END
 
 # SqliteSaver: 0.3系では langgraph-checkpoint-sqlite が別パッケージ
 # pip install langgraph-checkpoint-sqlite
-try:
-    from langgraph.checkpoint.sqlite import SqliteSaver
-except ImportError:
-    from langgraph_checkpoint_sqlite import SqliteSaver
+# AsyncSqliteSaver: ainvoke使用時は非同期チェックポインタが必須
+# pip install aiosqlite
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # SDKs
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from anthropic import AsyncAnthropic
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -36,8 +36,9 @@ from langchain_core.messages import SystemMessage, HumanMessage
 load_dotenv()
 
 # ---------- Gemini ----------
+_gemini_client = None
 if os.getenv("GOOGLE_API_KEY"):
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    _gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # ---------- Claude ----------
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
@@ -142,13 +143,15 @@ def build_context_prompt(messages: List[Message]) -> str:
 # ==========
 # LLM callers (完全非同期化)
 async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
-    model = genai.GenerativeModel(
-        model_name=os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
-        system_instruction=sys
-    )
-    resp = await model.generate_content_async(
-        prompt,
-        generation_config=genai.types.GenerationConfig(max_output_tokens=max_tokens)
+    if _gemini_client is None:
+        raise RuntimeError("Gemini client not initialized")
+    resp = await _gemini_client.aio.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=sys,
+            max_output_tokens=max_tokens,
+        )
     )
     return (resp.text or "").strip()
 
@@ -290,20 +293,21 @@ graph.set_entry_point("supervisor")
 graph.add_edge("supervisor", "agent")
 graph.add_edge("agent", END)
 
-#db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
-#checkpointer = SqliteSaver.from_conn_string(db_path)
-#app_graph = graph.compile(checkpointer=checkpointer)
-
-import sqlite3
 db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
-conn = sqlite3.connect(db_path, check_same_thread=False)
-checkpointer = SqliteSaver(conn)
-app_graph = graph.compile(checkpointer=checkpointer)
+
+# lifespan で非同期接続を管理
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
+        app.state.app_graph = graph.compile(checkpointer=checkpointer)
+        yield
 
 # ==========
 # FastAPI
 # ==========
-app = FastAPI(title="Multi-AI Meeting")
+app = FastAPI(title="Multi-AI Meeting", lifespan=lifespan)
 
 class StartPayload(BaseModel):
     session_id: str = Field(..., description="会議ID")
@@ -321,7 +325,7 @@ async def start_session(p: StartPayload):
         "need_human": False,
         "meta": {}
     }
-    app_graph.update_state(
+    await app.state.app_graph.aupdate_state(
         config={"configurable": {"thread_id": p.session_id}},
         values=state
     )
@@ -336,7 +340,7 @@ class ChatPayload(BaseModel):
 @app.post("/chat")
 async def send_chat(cp: ChatPayload):
     cfg = {"configurable": {"thread_id": cp.session_id}}
-    app_graph.update_state(
+    await app.state.app_graph.aupdate_state(
         config=cfg,
         values={
             "messages": [{"role": "user", "content": cp.text, "agent": "human"}],
@@ -344,8 +348,8 @@ async def send_chat(cp: ChatPayload):
             "read_only": cp.read_only
         }
     )
-    out = await app_graph.ainvoke({}, config=cfg)
-    current = app_graph.get_state(config=cfg).values
+    out = await app.state.app_graph.ainvoke({}, config=cfg)
+    current = (await app.state.app_graph.aget_state(config=cfg)).values
     return {
         "messages": current["messages"][-5:],
         "phase": current["phase"],
@@ -362,7 +366,7 @@ class ConfigPayload(BaseModel):
 @app.post("/config")
 async def reconfigure(cp: ConfigPayload):
     if cp.participants is not None:
-        app_graph.update_state(
+        await app.state.app_graph.aupdate_state(
             config={"configurable": {"thread_id": cp.session_id}},
             values={"target_agents": cp.participants}
         )
