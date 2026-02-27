@@ -1,0 +1,17 @@
+# Environments
+.env
+.venv/
+venv/
+
+# LangGraph Checkpoints (State DB)
+*.sqlite
+*.sqlite3
+checkpoints.sqlite
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Logs & Minutes (if created dynamically)
+logs/
+minutes/
