@@ -290,8 +290,14 @@ graph.set_entry_point("supervisor")
 graph.add_edge("supervisor", "agent")
 graph.add_edge("agent", END)
 
+#db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
+#checkpointer = SqliteSaver.from_conn_string(db_path)
+#app_graph = graph.compile(checkpointer=checkpointer)
+
+import sqlite3
 db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
-checkpointer = SqliteSaver.from_conn_string(db_path)
+conn = sqlite3.connect(db_path, check_same_thread=False)
+checkpointer = SqliteSaver(conn)
 app_graph = graph.compile(checkpointer=checkpointer)
 
 # ==========
