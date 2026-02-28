@@ -162,6 +162,10 @@ def init_state():
         st.session_state.minutes = []
     if "need_human" not in st.session_state:
         st.session_state.need_human = False
+    if "input_text" not in st.session_state:
+        st.session_state.input_text = ""
+    if "clear_count" not in st.session_state:
+        st.session_state.clear_count = 0
 
 init_state()
 
@@ -254,18 +258,23 @@ target = selected_label.split(" ")[-1]  # "● gemini" → "gemini"
 # read-only トグル
 read_only = st.toggle("read-only（文脈共有のみ、応答なし）", value=False)
 
-# 入力欄
+# 入力欄（clear_countをkeyに含めることでボタン押下時に強制リセット）
 user_input = st.text_area(
     label="",
     placeholder="入力...",
     height=100,
     label_visibility="collapsed",
+    key=f"input_{st.session_state.clear_count}",
 )
 
-# 送信
-send_col, _ = st.columns([1, 3])
+# 送信 / クリア
+send_col, clear_col, _ = st.columns([2, 1, 2])
 with send_col:
     send_btn = st.button("SEND ▶", use_container_width=True, type="primary")
+with clear_col:
+    if st.button("✕", use_container_width=True):
+        st.session_state.clear_count += 1
+        st.rerun()
 
 if send_btn and user_input.strip():
     with st.spinner("dispatching..."):
