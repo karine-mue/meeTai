@@ -1,16 +1,16 @@
 """
 Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 修正点：
-- コンテキスト喪失バグの修正（全メッセージ履歴を文字列化して渡す構造へ変更）
-- 完全非同期I/O化（AsyncAnthropic, generate_content_async）
-- langgraph 0.3系対応（SqliteSaverのimport）
-- QWEN_BASE_URL をollama互換に修正（11434/v1）
-- GPTノードを休眠状態で保持（APIキー未定義で自動パージ）
+- Reducer (operator.add) の導入によるコンテキストのサイレント破棄バグ修正
+- ノード関数からの差分返却（純粋関数化）によるイミュータビリティ確保
+- ainvoke(None) による適正な状態レジューム
 """
 
 import os
 import asyncio
-from typing import Literal, TypedDict, List, Dict, Optional
+import operator
+from typing import Literal, TypedDict, List, Dict, Optional, Annotated
+from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
@@ -19,11 +19,6 @@ from pydantic import BaseModel, Field
 
 # LangGraph
 from langgraph.graph import StateGraph, END
-
-# SqliteSaver: 0.3系では langgraph-checkpoint-sqlite が別パッケージ
-# pip install langgraph-checkpoint-sqlite
-# AsyncSqliteSaver: ainvoke使用時は非同期チェックポインタが必須
-# pip install aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # SDKs
@@ -44,12 +39,11 @@ if os.getenv("GOOGLE_API_KEY"):
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
 # ---------- Qwen (ollama) ----------
-# ollamaのデフォルトポートは11434
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "http://localhost:11434/v1")
-QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "ollama")   # ollamaはダミーキーでOK
+QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "ollama")
 QWEN_MODEL    = os.getenv("QWEN_MODEL", "qwen2.5:14b")
 
-# ---------- GPT (optional) ----------
+# ---------- GPT (optional/休眠) ----------
 GPT_AVAILABLE = bool(os.getenv("OPENAI_API_KEY"))
 
 # ==========
@@ -61,7 +55,8 @@ class Message(TypedDict):
     agent: Optional[str]
 
 class MeetingState(TypedDict):
-    messages: List[Message]
+    # operator.addにより、差分返却時にリストが自動結合される
+    messages: Annotated[List[Message], operator.add]
     phase: Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]
     target_agents: List[str]
     next_agent: Optional[str]
@@ -79,7 +74,7 @@ DEFAULT_SYSTEM = (
 # ==========
 class AgentConfig(BaseModel):
     enabled: bool = True
-    max_tokens: int = 600
+    max_tokens: int = 2000
     system_prompt: str = DEFAULT_SYSTEM
 
 class Registry(BaseModel):
@@ -94,9 +89,7 @@ REGISTRY = Registry()
 # Availability checks
 # ==========
 async def is_qwen_up(timeout: float = 2.0) -> bool:
-    """ollama互換エンドポイントの死活確認"""
     url = QWEN_BASE_URL.rstrip("/")
-    # /v1/models または /api/tags で確認
     check_url = url + "/models" if url.endswith("/v1") else url + "/v1/models"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -116,14 +109,12 @@ def available_agents_sync() -> List[str]:
         avail.append("claude")
     if REGISTRY.gpt.enabled and os.getenv("OPENAI_API_KEY"):
         avail.append("gpt")
-    # qwenは非同期ヘルスチェックのためここでは保留
     return avail
 
 # ==========
 # Context Builder
 # ==========
 def build_context_prompt(messages: List[Message]) -> str:
-    """全メッセージ履歴を単一のコンテキストテキストへ変換し、APIの厳密なRole制約を回避する"""
     prompt = "【会議ログ（コンテキスト）】\n"
     has_user_input = False
     for m in messages:
@@ -141,7 +132,8 @@ def build_context_prompt(messages: List[Message]) -> str:
     return prompt
 
 # ==========
-# LLM callers (完全非同期化)
+# LLM callers
+# ==========
 async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
     if _gemini_client is None:
         raise RuntimeError("Gemini client not initialized")
@@ -188,7 +180,6 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
     out = await llm.ainvoke(msgs)
     return out.content.strip()
 
-# callerのディスパッチテーブル（CALLERSの構文エラーをここで修正）
 CALLERS = {
     "gemini": call_gemini,
     "claude": call_claude,
@@ -199,25 +190,20 @@ CALLERS = {
 # ==========
 # Supervisor node
 # ==========
-def pick_next_agent(state: MeetingState) -> MeetingState:
+def pick_next_agent(state: MeetingState) -> dict:
     dynamic = set(state.get("target_agents") or [])
     avail = set(available_agents_sync())
 
-    # qwenはユーザが指定していれば候補に含める（実呼び出し時にヘルスチェック）
     if "qwen" in dynamic:
         avail.add("qwen")
 
     candidates = list(dynamic.intersection(avail)) if dynamic else list(avail)
 
     if state.get("read_only", False):
-        state["next_agent"] = None
-        state["need_human"] = False
-        return state
+        return {"next_agent": None, "need_human": False}
 
     if not candidates:
-        state["next_agent"] = None
-        state["need_human"] = True
-        return state
+        return {"next_agent": None, "need_human": True}
 
     phase = state.get("phase", "FREE")
     priority = {
@@ -228,59 +214,44 @@ def pick_next_agent(state: MeetingState) -> MeetingState:
     }
     for a in priority[phase]:
         if a in candidates:
-            state["next_agent"] = a
-            state["need_human"] = False
-            return state
+            return {"next_agent": a, "need_human": False}
 
-    state["next_agent"] = None
-    state["need_human"] = True
-    return state
+    return {"next_agent": None, "need_human": True}
 
 # ==========
 # Agent node
 # ==========
-async def agent_node(state: MeetingState) -> MeetingState:
+async def agent_node(state: MeetingState) -> dict:
     agent = state.get("next_agent")
     if not agent:
-        return state
+        return {}
 
-    prompt = build_context_prompt(state["messages"])
+    prompt = build_context_prompt(state.get("messages", []))
     if not prompt:
-        state["next_agent"] = None
-        state["need_human"] = True
-        return state
+        return {"next_agent": None, "need_human": True}
 
     cfg: AgentConfig = getattr(REGISTRY, agent)
     caller = CALLERS.get(agent)
 
     if caller is None:
-        state["messages"].append({
-            "role": "assistant",
-            "content": f"[{agent}] unknown agent",
-            "agent": agent
-        })
-        state["need_human"] = True
-        return state
+        return {
+            "messages": [{"role": "assistant", "content": f"[{agent}] unknown agent", "agent": agent}],
+            "need_human": True
+        }
 
     try:
         text = await caller(prompt, cfg.system_prompt, cfg.max_tokens)
-        state["messages"].append({
-            "role": "assistant",
-            "content": text,
-            "agent": agent
-        })
-        state["next_agent"] = None
-        state["need_human"] = False
+        return {
+            "messages": [{"role": "assistant", "content": text, "agent": agent}],
+            "next_agent": None,
+            "need_human": False
+        }
     except Exception as e:
-        state["messages"].append({
-            "role": "assistant",
-            "content": f"[{agent}] error: {e}",
-            "agent": agent
-        })
-        state["next_agent"] = None
-        state["need_human"] = True
-
-    return state
+        return {
+            "messages": [{"role": "assistant", "content": f"[{agent}] error: {e}", "agent": agent}],
+            "next_agent": None,
+            "need_human": True
+        }
 
 # ==========
 # Build graph
@@ -294,9 +265,6 @@ graph.add_edge("supervisor", "agent")
 graph.add_edge("agent", END)
 
 db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
-
-# lifespan で非同期接続を管理
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -316,7 +284,7 @@ class StartPayload(BaseModel):
 
 @app.post("/session")
 async def start_session(p: StartPayload):
-    state: MeetingState = {
+    state = {
         "messages": [{"role": "system", "content": DEFAULT_SYSTEM, "agent": "system"}],
         "phase": p.phase,
         "target_agents": p.participants,
@@ -327,7 +295,8 @@ async def start_session(p: StartPayload):
     }
     await app.state.app_graph.aupdate_state(
         config={"configurable": {"thread_id": p.session_id}},
-        values=state
+        values=state,
+        as_node="__start__"
     )
     return {"ok": True, "session_id": p.session_id}
 
@@ -346,14 +315,16 @@ async def send_chat(cp: ChatPayload):
             "messages": [{"role": "user", "content": cp.text, "agent": "human"}],
             "phase": cp.phase or "FREE",
             "read_only": cp.read_only
-        }
+        },
+        as_node="__start__"
     )
-    out = await app.state.app_graph.ainvoke({}, config=cfg)
+    # 適切なレジュームトリガー(None)を送信
+    out = await app.state.app_graph.ainvoke(None, config=cfg)
     current = (await app.state.app_graph.aget_state(config=cfg)).values
     return {
-        "messages": current["messages"][-5:],
-        "phase": current["phase"],
-        "need_human": current["need_human"],
+        "messages": current.get("messages", [])[-5:],
+        "phase": current.get("phase"),
+        "need_human": current.get("need_human"),
         "next_agent": current.get("next_agent")
     }
 
@@ -368,7 +339,8 @@ async def reconfigure(cp: ConfigPayload):
     if cp.participants is not None:
         await app.state.app_graph.aupdate_state(
             config={"configurable": {"thread_id": cp.session_id}},
-            values={"target_agents": cp.participants}
+            values={"target_agents": cp.participants},
+            as_node="__start__"
         )
     if cp.system_prompts:
         for k, v in cp.system_prompts.items():
@@ -382,7 +354,6 @@ async def reconfigure(cp: ConfigPayload):
 
 @app.get("/health")
 async def health():
-    """各エージェントの現在の可用性を返す"""
     qwen_up = await is_qwen_up()
     return {
         "gemini": REGISTRY.gemini.enabled and bool(os.getenv("GOOGLE_API_KEY")),
