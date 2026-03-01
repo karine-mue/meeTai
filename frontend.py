@@ -162,8 +162,8 @@ def init_state():
         st.session_state.minutes = []
     if "need_human" not in st.session_state:
         st.session_state.need_human = False
-    if "input_text" not in st.session_state:
-        st.session_state.input_text = ""
+    if "sending" not in st.session_state:
+        st.session_state.sending = False
     if "clear_count" not in st.session_state:
         st.session_state.clear_count = 0
 
@@ -258,7 +258,7 @@ target = selected_label.split(" ")[-1]  # "● gemini" → "gemini"
 # read-only トグル
 read_only = st.toggle("read-only（文脈共有のみ、応答なし）", value=False)
 
-# 入力欄（clear_countをkeyに含めることでボタン押下時に強制リセット）
+# 入力欄（clear_countをkeyに含めることでCLEARボタン押下時に強制リセット）
 user_input = st.text_area(
     label="",
     placeholder="入力...",
@@ -270,13 +270,19 @@ user_input = st.text_area(
 # 送信 / クリア
 send_col, clear_col, _ = st.columns([2, 1, 2])
 with send_col:
-    send_btn = st.button("SEND ▶", use_container_width=True, type="primary")
+    send_btn = st.button(
+        "SEND ▶",
+        use_container_width=True,
+        type="primary",
+        disabled=st.session_state.sending  # 送信中は非活性化
+    )
 with clear_col:
     if st.button("✕", use_container_width=True):
         st.session_state.clear_count += 1
         st.rerun()
 
-if send_btn and user_input.strip():
+if send_btn and user_input.strip() and not st.session_state.sending:
+    st.session_state.sending = True
     with st.spinner("dispatching..."):
         # humanメッセージを先に議事録へ（時系列の正順を保持）
         st.session_state.minutes.append({
@@ -309,6 +315,8 @@ if send_btn and user_input.strip():
                     "content": f"[error] {e}",
                     "agent": target
                 })
+    st.session_state.sending = False
+    st.session_state.clear_count += 1  # 送信成功後に入力欄をクリア
     st.rerun()
 
 # need_human警告
