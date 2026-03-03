@@ -42,6 +42,9 @@ anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "http://localhost:11434/v1")
 QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "ollama")
 QWEN_MODEL    = os.getenv("QWEN_MODEL", "qwen2.5:14b")
+# ollamaはデフォルト5分アイドルでモデルをアンロードする。
+# それより短い間隔でkeep-aliveピングを送りVRAMに保持し続ける（0で無効）。
+QWEN_KEEP_ALIVE_INTERVAL = int(os.getenv("QWEN_KEEP_ALIVE_INTERVAL", "240"))  # 秒
 
 # ---------- GPT (optional/休眠) ----------
 GPT_AVAILABLE = bool(os.getenv("OPENAI_API_KEY"))
@@ -88,7 +91,7 @@ REGISTRY = Registry()
 # ==========
 # Availability checks
 # ==========
-async def is_qwen_up(timeout: float = 2.0) -> bool:
+async def is_qwen_up(timeout: float = 5.0) -> bool:
     url = QWEN_BASE_URL.rstrip("/")
     check_url = url + "/models" if url.endswith("/v1") else url + "/v1/models"
     try:
@@ -100,6 +103,26 @@ async def is_qwen_up(timeout: float = 2.0) -> bool:
             return r.status_code == 200
     except Exception:
         return False
+
+async def keep_qwen_warm() -> None:
+    """ollama の keep_alive: -1 でモデルをVRAMに保持する。
+    空プロンプトで生成リクエストを送るだけでよく、実際にトークンは消費されない。"""
+    # /v1 を除いたネイティブAPI URL
+    base = QWEN_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    url = f"{base}/api/generate"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, json={"model": QWEN_MODEL, "prompt": "", "keep_alive": -1})
+    except Exception:
+        pass  # ネットワークエラーは無視（次のループで再試行）
+
+async def _qwen_keep_warm_loop() -> None:
+    """アプリ起動時にモデルをロードし、その後は定期的にkeep-aliveピングを送る。"""
+    while True:
+        await keep_qwen_warm()
+        await asyncio.sleep(QWEN_KEEP_ALIVE_INTERVAL)
 
 def available_agents_sync() -> List[str]:
     avail = []
@@ -270,7 +293,14 @@ db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
 async def lifespan(app: FastAPI):
     async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
         app.state.app_graph = graph.compile(checkpointer=checkpointer)
-        yield
+        warm_task = None
+        if QWEN_KEEP_ALIVE_INTERVAL > 0:
+            warm_task = asyncio.create_task(_qwen_keep_warm_loop())
+        try:
+            yield
+        finally:
+            if warm_task is not None:
+                warm_task.cancel()
 
 # ==========
 # FastAPI
