@@ -1,0 +1,7 @@
+# Caddyfile - meeTai
+# meetai.example.com をあなたのドメインに書き換えてください
+# 配置先: /etc/caddy/Caddyfile
+
+meetai.example.com {
+    reverse_proxy 127.0.0.1:8501
+}
