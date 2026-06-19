@@ -15,6 +15,7 @@ import streamlit as st
 # ---------- 設定 ----------
 BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8008")
 AGENTS  = ["gemini", "claude", "gpt"]
+ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
 PHASES  = ["FREE", "CONTEXT", "CRITIQUE", "SYNTHESIS"]
 
 AGENT_COLOR = {
@@ -149,6 +150,19 @@ hr { border-color: #1e1e1e; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ---------- 認証 ----------
+if not st.user.is_logged_in:
+    st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
+    if st.button("GitHub でログイン", use_container_width=False):
+        st.login("github")
+    st.stop()
+
+if ALLOWED_EMAILS and st.user.email not in ALLOWED_EMAILS:
+    st.error("アクセスが許可されていません")
+    if st.button("ログアウト"):
+        st.logout()
+    st.stop()
 
 # ---------- セッション初期化 ----------
 def init_state():

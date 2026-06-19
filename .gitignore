@@ -1,5 +1,6 @@
 # Environments
 .env
+.streamlit/secrets.toml
 .venv/
 venv/
 .exports/
