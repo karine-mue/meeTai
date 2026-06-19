@@ -158,7 +158,11 @@ if not st.user.is_logged_in:
         st.login("github")
     st.stop()
 
-if ALLOWED_EMAILS and st.user.email not in ALLOWED_EMAILS:
+if not ALLOWED_EMAILS:
+    st.error("サーバ設定エラー: ALLOWED_EMAILS が未設定です（管理者に連絡してください）")
+    st.stop()
+
+if st.user.email not in ALLOWED_EMAILS:
     st.error("アクセスが許可されていません")
     if st.button("ログアウト"):
         st.logout()
