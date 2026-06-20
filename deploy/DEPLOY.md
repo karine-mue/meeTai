@@ -41,7 +41,7 @@ server_metadata_url   = "https://accounts.google.com/.well-known/openid-configur
 ALLOWED_EMAILS=you@gmail.com,colleague@gmail.com
 ```
 
-Googleアカウントで複数のエイリアスを持つ場合、実際にログインで使用するプライマリアドレスを指定する。
+Googleアカウントで複数のエイリアスを持つ場合、実際にログインで使用するプライマリアドレスを指定すること。
 
 ### `authlib>=1.3.2` が必要
 
@@ -65,7 +65,7 @@ Google OIDC 認証には `authlib>=1.3.2` が必要。`requirements.txt` にす�
 | TCP | 80 | HTTP（Caddy ACME 証明書取得） |
 | TCP | 443 | HTTPS |
 
-8501（Streamlit 直接） / 8008（FastAPI 直接）は追加しないこと。
+8501（Streamlit直接）/ 8008（FastAPI直接）は追加しないこと。
 
 ### UFW（OS 内ファイアウォール）
 
@@ -82,23 +82,39 @@ sudo ufw enable
 
 ---
 
-## 一時バックアップファイルの退避
+## シークレットバックアップ
 
-セットアップ作業中に以下のようなバックアップファイルがリポジトリ直下に生成されることがある。
-
-```
-.env.bak.YYYYMMDD_HHMMSS
-.streamlit/secrets.toml.bak.YYYYMMDD_HHMMSS
-```
-
-これらは `.gitignore` に追加済みのため git には追跡されないが、`git status` には untracked として表示される。  
-リポジトリ外に退避することを推奨する。
+`.env` と `.streamlit/secrets.toml` のバックアップには `deploy/backup-secrets.sh` を使う。
 
 ```bash
-mkdir -p ~/meetai-secrets-backup
-mv .env.bak.* ~/meetai-secrets-backup/ 2>/dev/null || true
-mv .streamlit/secrets.toml.bak.* ~/meetai-secrets-backup/ 2>/dev/null || true
-chmod 700 ~/meetai-secrets-backup
+bash deploy/backup-secrets.sh
+```
+
+### バックアップ先と命名規則
+
+```
+~/meetai-secrets-backup/
+  meetai/                        ← リポジトリ名でサブディレクトリを切る
+    env.20260620_143012
+    secrets_toml.20260620_143012
+    env.20260613_091500          ← 直近 5 件を超えると自動削除
+```
+
+- ドット始まりなし（`ls` で即見える）
+- 種別ごとに直近 5 件を保持してローテーション
+- バックアップファイルのパーミッションは `600`、ディレクトリは `700`
+
+### 既存の旧形式ファイルの整理
+
+初回セットアップ時に `~/meetai-secrets-backup/` 直下に旧形式で生成されたファイルは手動で削除する。
+
+```bash
+# 確認
+ls ~/meetai-secrets-backup/
+
+# 不要なら削除
+rm -f ~/meetai-secrets-backup/.env.bak.*
+rm -f ~/meetai-secrets-backup/secrets.toml.bak.*
 ```
 
 ---
