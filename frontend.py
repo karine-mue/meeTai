@@ -154,8 +154,8 @@ hr { border-color: #1e1e1e; }
 # ---------- 認証 ----------
 if not st.user.is_logged_in:
     st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
-    if st.button("GitHub でログイン", use_container_width=False):
-        st.login("github")
+    if st.button("Google でログイン", use_container_width=False):
+        st.login("google")
     st.stop()
 
 if not ALLOWED_EMAILS:
