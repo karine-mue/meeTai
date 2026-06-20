@@ -34,7 +34,7 @@ else
     echo "  -> .env already exists, skipping"
 fi
 
-# [5] Streamlit secrets.toml（GitHub OAuth 設定）
+# [5] Streamlit secrets.toml（Google OAuth 設定）
 echo "[5/7] Setting up Streamlit secrets..."
 mkdir -p "$APP_DIR/.streamlit"
 if [ ! -f "$APP_DIR/.streamlit/secrets.toml" ]; then
@@ -94,9 +94,9 @@ echo "  1. API キーを設定:"
 echo "       nano $APP_DIR/.env"
 echo "       （GOOGLE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / ALLOWED_EMAILS）"
 echo ""
-echo "  2. GitHub OAuth を設定:"
+echo "  2. Google OAuth を設定:"
 echo "       nano $APP_DIR/.streamlit/secrets.toml"
-echo "       GitHub OAuth App の登録先: https://github.com/settings/developers"
+echo "       Google Cloud Console: https://console.cloud.google.com/ → APIとサービス → 認証情報"
 echo "       callback URL: https://YOUR_DOMAIN/oauth2callback"
 echo ""
 echo "  3. Caddy のドメインを設定:"
