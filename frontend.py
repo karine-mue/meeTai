@@ -11,6 +11,8 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import streamlit as st
@@ -20,6 +22,7 @@ BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8008")
 AGENTS  = ["gemini", "claude", "gpt"]
 ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
 PHASES  = ["FREE", "CONTEXT", "CRITIQUE", "SYNTHESIS"]
+DEFAULT_TIMEZONE = "Asia/Tokyo"
 
 AGENT_COLOR = {
     "gemini": "#4285F4",
@@ -203,6 +206,18 @@ def init_state():
 init_state()
 
 # ---------- バックエンド接続 ----------
+def app_timezone():
+    name = os.getenv("APP_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo(DEFAULT_TIMEZONE)
+
+
+def current_month_placeholder():
+    return datetime.now(app_timezone()).strftime("%Y-%m")
+
+
 def start_session(participants, title):
     sid = f"mtg_{uuid.uuid4().hex[:8]}"
     r = httpx.post(f"{BACKEND}/session", json={
@@ -274,9 +289,9 @@ def format_session_label(item):
 def render_archive():
     with st.expander("ARCHIVE / past sessions", expanded=False):
         range_labels = {
-            "7d": "直近1週間",
-            "30d": "直近1か月",
-            "90d": "直近3か月",
+            "7d": "直近7日",
+            "30d": "直近30日",
+            "90d": "直近90日",
             "month": "年月指定",
         }
         range_choice = st.selectbox(
@@ -291,7 +306,7 @@ def render_archive():
             month = st.text_input(
                 "年月",
                 value=st.session_state.archive_month,
-                placeholder="2026-06",
+                placeholder=current_month_placeholder(),
                 key="archive_month_input",
             ).strip()
             st.session_state.archive_month = month
