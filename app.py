@@ -73,8 +73,11 @@ DEFAULT_SYSTEM = "あなたはAIアシスタントです。"
 PHASE_PROMPTS: dict[str, str] = {
     "FREE": (
         "あなたはAIアシスタントです。"
-        "ユーザーの入力に自然に応答してください。"
-        "形式を強制せず、入力にない情報（議題・目的・次アクション等）を補わないでください。"
+        "ユーザーの入力に直接答えてください。"
+        "会議形式・前提/仮説/反証/結論/次アクション形式は使わないでください。"
+        "回答は薄くしすぎず、ユーザーがそのまま使える具体性を持たせてください。"
+        "条件が示されている場合はそれを守ってください。"
+        "入力にない議題・評価実験・次アクションを追加しないでください。"
     ),
     "CONTEXT": (
         "あなたはR&D会議の参加者です。"
@@ -124,7 +127,16 @@ def available_agents_sync() -> List[str]:
 # ==========
 # Context Builder
 # ==========
-def build_context_prompt(messages: List[Message]) -> str:
+def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
+    if phase == "FREE":
+        # 同一ターン内で先行LLMの応答がコンテキストに混入しないよう、
+        # 最後のユーザー入力より後のassistantメッセージを除外する
+        last_user_idx = max(
+            (i for i, m in enumerate(messages) if m["role"] == "user"),
+            default=-1,
+        )
+        messages = messages[: last_user_idx + 1] if last_user_idx >= 0 else messages
+
     prompt = "【会議ログ（コンテキスト）】\n"
     has_user_input = False
     for m in messages:
@@ -218,10 +230,6 @@ async def agent_node(state: MeetingState) -> dict:
     if not agent:
         return {}
 
-    prompt = build_context_prompt(state.get("messages", []))
-    if not prompt:
-        return {"next_agent": None, "need_human": True}
-
     cfg: AgentConfig = getattr(REGISTRY, agent)
     caller = CALLERS.get(agent)
 
@@ -233,6 +241,9 @@ async def agent_node(state: MeetingState) -> dict:
 
     phase = state.get("phase", "FREE")
     sys_prompt = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+    prompt = build_context_prompt(state.get("messages", []), phase)
+    if not prompt:
+        return {"next_agent": None, "need_human": True}
 
     try:
         text = await caller(prompt, sys_prompt, cfg.max_tokens)
