@@ -7,8 +7,11 @@ Multi-AI Meeting Frontend (Streamlit)
 - FastAPI (app.py :8008) をバックエンドとして使用
 """
 
+import json
 import os
+import re
 import uuid
+
 import httpx
 import streamlit as st
 
@@ -128,6 +131,13 @@ hr { border-color: #1e1e1e; }
     border-top: 1px solid #1a1a1a;
 }
 
+/* archive */
+.archive-row {
+    font-size: 11px;
+    color: #777;
+    line-height: 1.7;
+}
+
 /* read-only badge */
 .badge-ro {
     background: #1a1a1a;
@@ -185,16 +195,22 @@ def init_state():
         st.session_state.sending = False
     if "clear_count" not in st.session_state:
         st.session_state.clear_count = 0
+    if "archive_range" not in st.session_state:
+        st.session_state.archive_range = "7d"
+    if "archive_month" not in st.session_state:
+        st.session_state.archive_month = ""
 
 init_state()
 
 # ---------- バックエンド接続 ----------
-def start_session(participants):
+def start_session(participants, title):
     sid = f"mtg_{uuid.uuid4().hex[:8]}"
     r = httpx.post(f"{BACKEND}/session", json={
         "session_id": sid,
         "participants": participants,
         "phase": st.session_state.phase,
+        "title": title,
+        "user_email": st.user.email,
     }, timeout=10.0)
     r.raise_for_status()
     return sid
@@ -216,6 +232,131 @@ def get_health():
     except Exception:
         return {}
 
+def list_archived_sessions(range_key, month):
+    params = {"limit": 100}
+    if month:
+        params["month"] = month
+    else:
+        params["range"] = range_key
+    r = httpx.get(f"{BACKEND}/sessions", params=params, timeout=10.0)
+    r.raise_for_status()
+    return r.json().get("sessions", [])
+
+def export_archived_session(session_id, fmt):
+    r = httpx.get(
+        f"{BACKEND}/sessions/{session_id}/export",
+        params={"format": fmt},
+        timeout=15.0,
+    )
+    r.raise_for_status()
+    if fmt == "json":
+        return json.dumps(r.json(), ensure_ascii=False, indent=2)
+    return r.text
+
+def safe_filename(title, session_id, ext):
+    base = re.sub(r"[^0-9A-Za-zぁ-んァ-ン一-龥ー_-]+", "_", title).strip("_")
+    if not base:
+        base = session_id
+    return f"{base}_{session_id}.{ext}"
+
+def format_session_label(item):
+    title = item.get("title") or "untitled"
+    updated = (item.get("updated_at") or "").replace("T", " ")[:16]
+    turns = item.get("turns_used") or 0
+    calls = item.get("llm_calls_used") or 0
+    agents = item.get("agents") or "[]"
+    try:
+        agents_text = ",".join(json.loads(agents))
+    except Exception:
+        agents_text = agents
+    return f"{updated} · {title} · {turns} turns · {calls} calls · {agents_text}"
+
+def render_archive():
+    with st.expander("ARCHIVE / past sessions", expanded=False):
+        range_labels = {
+            "7d": "直近1週間",
+            "30d": "直近1か月",
+            "90d": "直近3か月",
+            "month": "年月指定",
+        }
+        range_choice = st.selectbox(
+            "期間",
+            ["7d", "30d", "90d", "month"],
+            format_func=lambda x: range_labels[x],
+            key="archive_range_choice",
+        )
+
+        month = ""
+        if range_choice == "month":
+            month = st.text_input(
+                "年月",
+                value=st.session_state.archive_month,
+                placeholder="2026-06",
+                key="archive_month_input",
+            ).strip()
+            st.session_state.archive_month = month
+
+        try:
+            sessions = list_archived_sessions(
+                range_key=range_choice if range_choice != "month" else "7d",
+                month=month if range_choice == "month" else "",
+            )
+        except Exception as e:
+            st.error(f"archive取得失敗: {e}")
+            return
+
+        if not sessions:
+            st.markdown("<div style='color:#333;font-size:12px;padding:8px 0'>no archived sessions</div>", unsafe_allow_html=True)
+            return
+
+        selected_idx = st.selectbox(
+            "SESSION",
+            options=list(range(len(sessions))),
+            format_func=lambda i: format_session_label(sessions[i]),
+            key="archive_session_select",
+        )
+        selected = sessions[selected_idx]
+        sid = selected["session_id"]
+        title = selected.get("title") or "untitled"
+
+        st.markdown(
+            f"<div class='archive-row'>selected: {title} · {sid}</div>",
+            unsafe_allow_html=True,
+        )
+
+        try:
+            markdown_text = export_archived_session(sid, "markdown")
+            json_text = export_archived_session(sid, "json")
+        except Exception as e:
+            st.error(f"export取得失敗: {e}")
+            return
+
+        st.download_button(
+            "↓ DOWNLOAD MARKDOWN",
+            data=markdown_text,
+            file_name=safe_filename(title, sid, "md"),
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"archive_md_{sid}",
+        )
+        st.download_button(
+            "↓ DOWNLOAD JSON",
+            data=json_text,
+            file_name=safe_filename(title, sid, "json"),
+            mime="application/json",
+            use_container_width=True,
+            key=f"archive_json_{sid}",
+        )
+
+        with st.expander("preview", expanded=False):
+            st.text_area(
+                "",
+                value=markdown_text,
+                height=260,
+                label_visibility="collapsed",
+                key=f"archive_preview_{sid}",
+            )
+
 # ---------- UI ----------
 # ヘッダー
 st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
@@ -223,8 +364,16 @@ st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_al
 # ヘルスチェック＆セッション開始
 health = get_health()
 
+render_archive()
+
 if not st.session_state.session_id:
     st.markdown("<div style='color:#555;font-size:12px;margin-bottom:12px'>参加エージェントを選択してセッションを開始</div>", unsafe_allow_html=True)
+
+    session_title = st.text_input(
+        "SESSION TITLE",
+        placeholder="例: API利用上限の設計",
+        label_visibility="visible",
+    )
 
     # 参加者選択
     selected = []
@@ -240,8 +389,11 @@ if not st.session_state.session_id:
             st.warning("1つ以上選択")
         else:
             try:
-                sid = start_session(selected)
+                sid = start_session(selected, session_title)
                 st.session_state.session_id = sid
+                st.session_state.logs = {a: [] for a in AGENTS}
+                st.session_state.minutes = []
+                st.session_state.need_human = False
                 st.rerun()
             except Exception as e:
                 st.error(f"接続失敗: {e}")
