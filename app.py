@@ -128,6 +128,14 @@ def available_agents_sync() -> List[str]:
 # ==========
 # Context Builder
 # ==========
+def resolve_sys_prompt(agent: str, phase: str, cfg: AgentConfig) -> str:
+    base = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+    return (
+        f"{base}\n"
+        f"あなたは現在 [{agent}] として発言しています。"
+        f"会議ログ内の [{agent}] の発言はあなた自身のものです。"
+    )
+
 def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
     if phase == "FREE":
         # 同一ターン内で先行LLMの応答がコンテキストに混入しないよう、
@@ -241,7 +249,7 @@ async def agent_node(state: MeetingState) -> dict:
         }
 
     phase = state.get("phase", "FREE")
-    sys_prompt = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+    sys_prompt = resolve_sys_prompt(agent, phase, cfg)
     prompt = build_context_prompt(state.get("messages", []), phase)
     if not prompt:
         return {"next_agent": None, "need_human": True}
@@ -438,7 +446,7 @@ async def ask_all(p: AskAllPayload):
         caller = CALLERS.get(agent)
         if caller is None:
             return agent, None
-        sys_prompt = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+        sys_prompt = resolve_sys_prompt(agent, phase, cfg)
         try:
             text = await caller(context_prompt, sys_prompt, cfg.max_tokens)
             return agent, text
