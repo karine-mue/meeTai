@@ -7,19 +7,21 @@ Multi-AI Meeting Frontend (Streamlit)
 - FastAPI (app.py :8008) をバックエンドとして使用
 """
 
+import os
 import uuid
 import httpx
 import streamlit as st
 
 # ---------- 設定 ----------
-BACKEND = "http://127.0.0.1:8008"
-AGENTS  = ["gemini", "claude", "qwen"]
+BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8008")
+AGENTS  = ["gemini", "claude", "gpt"]
+ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
 PHASES  = ["FREE", "CONTEXT", "CRITIQUE", "SYNTHESIS"]
 
 AGENT_COLOR = {
     "gemini": "#4285F4",
     "claude": "#D4A853",
-    "qwen":   "#7B61FF",
+    "gpt":    "#10A37F",
     "human":  "#888888",
     "system": "#444444",
 }
@@ -148,6 +150,23 @@ hr { border-color: #1e1e1e; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ---------- 認証 ----------
+if not st.user.is_logged_in:
+    st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
+    if st.button("Google でログイン", use_container_width=False):
+        st.login("google")
+    st.stop()
+
+if not ALLOWED_EMAILS:
+    st.error("サーバ設定エラー: ALLOWED_EMAILS が未設定です（管理者に連絡してください）")
+    st.stop()
+
+if st.user.email not in ALLOWED_EMAILS:
+    st.error("アクセスが許可されていません")
+    if st.button("ログアウト"):
+        st.logout()
+    st.stop()
 
 # ---------- セッション初期化 ----------
 def init_state():
@@ -321,7 +340,7 @@ if send_btn and user_input.strip() and not st.session_state.sending:
 
 # need_human警告
 if st.session_state.need_human:
-    st.markdown("<div class='need-human'>⚠ Qwen unavailable — human moderation required</div>", unsafe_allow_html=True)
+    st.markdown("<div class='need-human'>⚠ No agent available — check API keys or agent selection</div>", unsafe_allow_html=True)
     if st.button("dismiss", key="dismiss_nh"):
         st.session_state.need_human = False
 

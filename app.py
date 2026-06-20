@@ -7,12 +7,10 @@ Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 """
 
 import os
-import asyncio
 import operator
 from typing import Literal, TypedDict, List, Dict, Optional, Annotated
 from contextlib import asynccontextmanager
 
-import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -38,15 +36,7 @@ if os.getenv("GOOGLE_API_KEY"):
 # ---------- Claude ----------
 anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
-# ---------- Qwen (ollama) ----------
-QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "http://localhost:11434/v1")
-QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "ollama")
-QWEN_MODEL    = os.getenv("QWEN_MODEL", "qwen2.5:14b")
-# ollamaはデフォルト5分アイドルでモデルをアンロードする。
-# それより短い間隔でkeep-aliveピングを送りVRAMに保持し続ける（0で無効）。
-QWEN_KEEP_ALIVE_INTERVAL = int(os.getenv("QWEN_KEEP_ALIVE_INTERVAL", "240"))  # 秒
-
-# ---------- GPT (optional/休眠) ----------
+# ---------- GPT ----------
 GPT_AVAILABLE = bool(os.getenv("OPENAI_API_KEY"))
 
 # ==========
@@ -83,7 +73,6 @@ class AgentConfig(BaseModel):
 class Registry(BaseModel):
     gemini: AgentConfig = AgentConfig(enabled=bool(os.getenv("GOOGLE_API_KEY")))
     claude: AgentConfig = AgentConfig(enabled=bool(os.getenv("ANTHROPIC_API_KEY")))
-    qwen:   AgentConfig = AgentConfig(enabled=True)
     gpt:    AgentConfig = AgentConfig(enabled=GPT_AVAILABLE)
 
 REGISTRY = Registry()
@@ -91,39 +80,6 @@ REGISTRY = Registry()
 # ==========
 # Availability checks
 # ==========
-async def is_qwen_up(timeout: float = 5.0) -> bool:
-    url = QWEN_BASE_URL.rstrip("/")
-    check_url = url + "/models" if url.endswith("/v1") else url + "/v1/models"
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(
-                check_url,
-                headers={"Authorization": f"Bearer {QWEN_API_KEY}"}
-            )
-            return r.status_code == 200
-    except Exception:
-        return False
-
-async def keep_qwen_warm() -> None:
-    """ollama の keep_alive: -1 でモデルをVRAMに保持する。
-    空プロンプトで生成リクエストを送るだけでよく、実際にトークンは消費されない。"""
-    # /v1 を除いたネイティブAPI URL
-    base = QWEN_BASE_URL.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
-    url = f"{base}/api/generate"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, json={"model": QWEN_MODEL, "prompt": "", "keep_alive": -1})
-    except Exception:
-        pass  # ネットワークエラーは無視（次のループで再試行）
-
-async def _qwen_keep_warm_loop() -> None:
-    """アプリ起動時にモデルをロードし、その後は定期的にkeep-aliveピングを送る。"""
-    while True:
-        await keep_qwen_warm()
-        await asyncio.sleep(QWEN_KEEP_ALIVE_INTERVAL)
-
 def available_agents_sync() -> List[str]:
     avail = []
     if REGISTRY.gemini.enabled and os.getenv("GOOGLE_API_KEY"):
@@ -161,7 +117,7 @@ async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
     if _gemini_client is None:
         raise RuntimeError("Gemini client not initialized")
     resp = await _gemini_client.aio.models.generate_content(
-        model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             system_instruction=sys,
@@ -179,20 +135,6 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
     )
     return resp.content[0].text.strip()
 
-async def call_qwen(prompt: str, sys: str, max_tokens: int) -> str:
-    if not await is_qwen_up():
-        raise RuntimeError("Qwen (ollama) server not available")
-    llm = ChatOpenAI(
-        base_url=QWEN_BASE_URL,
-        api_key=QWEN_API_KEY,
-        model=QWEN_MODEL,
-        max_tokens=max_tokens,
-        temperature=0.6
-    )
-    msgs = [SystemMessage(content=sys), HumanMessage(content=prompt)]
-    out = await llm.ainvoke(msgs)
-    return out.content.strip()
-
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
     llm = ChatOpenAI(
         model=os.getenv("OPENAI_MODEL", "gpt-4o"),
@@ -206,7 +148,6 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
 CALLERS = {
     "gemini": call_gemini,
     "claude": call_claude,
-    "qwen":   call_qwen,
     "gpt":    call_gpt,
 }
 
@@ -216,9 +157,6 @@ CALLERS = {
 def pick_next_agent(state: MeetingState) -> dict:
     dynamic = set(state.get("target_agents") or [])
     avail = set(available_agents_sync())
-
-    if "qwen" in dynamic:
-        avail.add("qwen")
 
     candidates = list(dynamic.intersection(avail)) if dynamic else list(avail)
 
@@ -230,10 +168,10 @@ def pick_next_agent(state: MeetingState) -> dict:
 
     phase = state.get("phase", "FREE")
     priority = {
-        "CRITIQUE":  ["claude", "gemini", "qwen", "gpt"],
-        "SYNTHESIS": ["qwen", "gemini", "gpt", "claude"],
-        "CONTEXT":   ["gemini", "claude", "qwen", "gpt"],
-        "FREE":      ["gemini", "claude", "qwen", "gpt"],
+        "CRITIQUE":  ["claude", "gemini", "gpt"],
+        "SYNTHESIS": ["gemini", "gpt", "claude"],
+        "CONTEXT":   ["gemini", "claude", "gpt"],
+        "FREE":      ["gemini", "claude", "gpt"],
     }
     for a in priority[phase]:
         if a in candidates:
@@ -293,14 +231,7 @@ db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
 async def lifespan(app: FastAPI):
     async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
         app.state.app_graph = graph.compile(checkpointer=checkpointer)
-        warm_task = None
-        if QWEN_KEEP_ALIVE_INTERVAL > 0:
-            warm_task = asyncio.create_task(_qwen_keep_warm_loop())
-        try:
-            yield
-        finally:
-            if warm_task is not None:
-                warm_task.cancel()
+        yield
 
 # ==========
 # FastAPI
@@ -309,7 +240,7 @@ app = FastAPI(title="Multi-AI Meeting", lifespan=lifespan)
 
 class StartPayload(BaseModel):
     session_id: str = Field(..., description="会議ID")
-    participants: List[str] = Field(default_factory=lambda: ["gemini", "claude", "qwen"])
+    participants: List[str] = Field(default_factory=lambda: ["gemini", "claude", "gpt"])
     phase: Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"] = "FREE"
 
 @app.post("/session")
@@ -384,12 +315,10 @@ async def reconfigure(cp: ConfigPayload):
 
 @app.get("/health")
 async def health():
-    qwen_up = await is_qwen_up()
     return {
         "gemini": REGISTRY.gemini.enabled and bool(os.getenv("GOOGLE_API_KEY")),
         "claude": REGISTRY.claude.enabled and bool(os.getenv("ANTHROPIC_API_KEY")),
-        "qwen":   qwen_up,
         "gpt":    GPT_AVAILABLE,
     }
 
-# Run: uvicorn app:app --reload --host 127.0.0.1 --port 8008
+# Run: uvicorn app:app --host 127.0.0.1 --port 8008
