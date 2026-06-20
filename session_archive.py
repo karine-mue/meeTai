@@ -106,7 +106,7 @@ def create_session_record(
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO sessions (
+            INSERT OR IGNORE INTO sessions (
               session_id, title, topic, created_at, updated_at,
               user_email, phase, agents,
               turns_used, llm_calls_used, input_tokens, output_tokens, total_tokens
