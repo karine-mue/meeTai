@@ -68,10 +68,30 @@ class MeetingState(TypedDict):
     need_human: bool
     meta: Dict
 
-DEFAULT_SYSTEM = (
-    "あなたはR&D会議の参加者です。発話は簡潔（最大600字）。"
-    "フェーズに従い、前提→仮説→反証→結論→次アクションの順で述べる。"
-)
+DEFAULT_SYSTEM = "あなたはAIアシスタントです。"
+
+PHASE_PROMPTS: dict[str, str] = {
+    "FREE": (
+        "あなたはAIアシスタントです。"
+        "ユーザーの入力に自然に応答してください。"
+        "形式を強制せず、入力にない情報（議題・目的・次アクション等）を補わないでください。"
+    ),
+    "CONTEXT": (
+        "あなたはR&D会議の参加者です。"
+        "議論の背景・制約・既知情報を整理し、判断材料を増やしてください。"
+        "結論を急がず、不明な点は仮定として明示してください。"
+    ),
+    "CRITIQUE": (
+        "あなたはR&D会議の参加者です。"
+        "議論の弱点・リスク・抜けを指摘し、代替案を提示してください。"
+        "形式的な構造埋めは避けてください。"
+    ),
+    "SYNTHESIS": (
+        "あなたはR&D会議の参加者です。"
+        "議論を統合し、残すべき判断材料を整理してください。"
+        "次アクションは必要な場合のみ提示してください。"
+    ),
+}
 
 # ==========
 # Agent registry
@@ -79,7 +99,7 @@ DEFAULT_SYSTEM = (
 class AgentConfig(BaseModel):
     enabled: bool = True
     max_tokens: int = 2000
-    system_prompt: str = DEFAULT_SYSTEM
+    system_prompt: Optional[str] = None
 
 class Registry(BaseModel):
     gemini: AgentConfig = AgentConfig(enabled=bool(os.getenv("GOOGLE_API_KEY")))
@@ -211,8 +231,11 @@ async def agent_node(state: MeetingState) -> dict:
             "need_human": True
         }
 
+    phase = state.get("phase", "FREE")
+    sys_prompt = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+
     try:
-        text = await caller(prompt, cfg.system_prompt, cfg.max_tokens)
+        text = await caller(prompt, sys_prompt, cfg.max_tokens)
         return {
             "messages": [{"role": "assistant", "content": text, "agent": agent}],
             "next_agent": None,
@@ -312,7 +335,7 @@ class StartPayload(BaseModel):
 @app.post("/session")
 async def start_session(p: StartPayload):
     state = {
-        "messages": [{"role": "system", "content": DEFAULT_SYSTEM, "agent": "system"}],
+        "messages": [{"role": "system", "content": f"session:{p.session_id}", "agent": "system"}],
         "phase": p.phase,
         "target_agents": p.participants,
         "next_agent": None,
