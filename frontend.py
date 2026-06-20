@@ -202,6 +202,8 @@ def init_state():
         st.session_state.archive_range = "7d"
     if "archive_month" not in st.session_state:
         st.session_state.archive_month = ""
+    if "session_participants" not in st.session_state:
+        st.session_state.session_participants = []
 
 init_state()
 
@@ -245,6 +247,7 @@ def ask_all(text: str):
         "session_id": st.session_state.session_id,
         "text": text,
         "phase": st.session_state.phase,
+        "participants": st.session_state.session_participants or None,
     }, timeout=180.0)
     r.raise_for_status()
     return r.json()
@@ -428,6 +431,7 @@ if not st.session_state.session_id:
             try:
                 sid = start_session(selected, session_title)
                 st.session_state.session_id = sid
+                st.session_state.session_participants = selected
                 st.session_state.logs = {a: [] for a in AGENTS}
                 st.session_state.minutes = []
                 st.session_state.need_human = False
@@ -543,6 +547,8 @@ if fanout_btn and user_input.strip() and not st.session_state.sending:
             result = ask_all(user_input)
             responses = result.get("responses", [])
             phase_used = result.get("phase", st.session_state.phase)
+            commit_fanout(user_input, responses, phase_used)
+            # commit成功後にUIへ反映（backend/archiveとのズレを防ぐ）
             for resp in responses:
                 agent = resp.get("agent")
                 content = resp.get("content", "")
@@ -550,7 +556,6 @@ if fanout_btn and user_input.strip() and not st.session_state.sending:
                     msg = {"role": "assistant", "content": content, "agent": agent}
                     st.session_state.logs[agent].append(msg)
                     st.session_state.minutes.append(msg)
-            commit_fanout(user_input, responses, phase_used)
         except Exception as e:
             st.error(f"fan-out error: {e}")
     st.session_state.sending = False
