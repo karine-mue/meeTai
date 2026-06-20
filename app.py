@@ -411,6 +411,7 @@ class AskAllPayload(BaseModel):
     session_id: str
     text: str
     participants: Optional[List[str]] = None
+    phase: Optional[Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]] = None
 
 @app.post("/ask-all")
 async def ask_all(p: AskAllPayload):
@@ -418,14 +419,17 @@ async def ask_all(p: AskAllPayload):
     current = await app.state.app_graph.aget_state(config=cfg_state)
     state_values = current.values if current and current.values else {}
     messages: List[Message] = state_values.get("messages", [])
-    phase: str = state_values.get("phase", "FREE")
+    phase: str = p.phase or state_values.get("phase", "FREE")
 
     # 共有コンテキスト + 今回のユーザー入力でプロンプトを生成
     # 各エージェントには同一コンテキストを渡す（先行応答はstateに未commit）
     user_msg: Message = {"role": "user", "content": p.text, "agent": "human"}
     context_prompt = build_context_prompt(messages + [user_msg], phase)
 
-    participants = [a for a in (p.participants or available_agents_sync()) if hasattr(REGISTRY, a)]
+    # セッション開始時の参加者を優先、なければ利用可能な全エージェント
+    session_targets: List[str] = state_values.get("target_agents") or []
+    default_agents = session_targets or available_agents_sync()
+    participants = [a for a in (p.participants or default_agents) if hasattr(REGISTRY, a)]
 
     async def call_one(agent: str):
         cfg: AgentConfig = getattr(REGISTRY, agent)

@@ -244,6 +244,7 @@ def ask_all(text: str):
     r = httpx.post(f"{BACKEND}/ask-all", json={
         "session_id": st.session_state.session_id,
         "text": text,
+        "phase": st.session_state.phase,
     }, timeout=180.0)
     r.raise_for_status()
     return r.json()
