@@ -8,6 +8,7 @@ Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 """
 
 import os
+import asyncio
 import operator
 from typing import Literal, TypedDict, List, Dict, Optional, Annotated
 from contextlib import asynccontextmanager
@@ -405,6 +406,76 @@ async def send_chat(cp: ChatPayload):
         "need_human": current.get("need_human"),
         "next_agent": current.get("next_agent")
     }
+
+class AskAllPayload(BaseModel):
+    session_id: str
+    text: str
+    participants: Optional[List[str]] = None
+
+@app.post("/ask-all")
+async def ask_all(p: AskAllPayload):
+    cfg_state = {"configurable": {"thread_id": p.session_id}}
+    current = await app.state.app_graph.aget_state(config=cfg_state)
+    state_values = current.values if current and current.values else {}
+    messages: List[Message] = state_values.get("messages", [])
+    phase: str = state_values.get("phase", "FREE")
+
+    # 共有コンテキスト + 今回のユーザー入力でプロンプトを生成
+    # 各エージェントには同一コンテキストを渡す（先行応答はstateに未commit）
+    user_msg: Message = {"role": "user", "content": p.text, "agent": "human"}
+    context_prompt = build_context_prompt(messages + [user_msg], phase)
+
+    participants = [a for a in (p.participants or available_agents_sync()) if hasattr(REGISTRY, a)]
+
+    async def call_one(agent: str):
+        cfg: AgentConfig = getattr(REGISTRY, agent)
+        if not cfg.enabled:
+            return agent, None
+        caller = CALLERS.get(agent)
+        if caller is None:
+            return agent, None
+        sys_prompt = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+        try:
+            text = await caller(context_prompt, sys_prompt, cfg.max_tokens)
+            return agent, text
+        except Exception as e:
+            return agent, f"[error] {e}"
+
+    results = await asyncio.gather(*[call_one(a) for a in participants])
+    responses = [{"agent": a, "content": c} for a, c in results if c is not None]
+
+    return {"responses": responses, "phase": phase}
+
+class CommitPayload(BaseModel):
+    session_id: str
+    human_text: str
+    responses: List[Dict[str, str]]
+    phase: Optional[Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]] = None
+
+@app.post("/commit")
+async def commit_fanout(p: CommitPayload):
+    cfg = {"configurable": {"thread_id": p.session_id}}
+    phase = p.phase or "FREE"
+
+    messages_to_add: List[Message] = [
+        {"role": "user", "content": p.human_text, "agent": "human"},
+        *[
+            {"role": "assistant", "content": r["content"], "agent": r["agent"]}
+            for r in p.responses
+            if r.get("content") and not r["content"].startswith("[error]")
+        ],
+    ]
+
+    await app.state.app_graph.aupdate_state(
+        config=cfg,
+        values={"messages": messages_to_add, "phase": phase},
+        as_node="__start__"
+    )
+
+    append_messages(app.state.archive_db_path, p.session_id, messages_to_add, phase=phase)
+
+    return {"ok": True, "committed": len(messages_to_add)}
+
 
 class ConfigPayload(BaseModel):
     session_id: str
