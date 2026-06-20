@@ -233,7 +233,7 @@ def get_health():
         return {}
 
 def list_archived_sessions(range_key, month):
-    params = {"limit": 100}
+    params = {"limit": 100, "user_email": st.user.email}
     if month:
         params["month"] = month
     else:
@@ -245,7 +245,7 @@ def list_archived_sessions(range_key, month):
 def export_archived_session(session_id, fmt):
     r = httpx.get(
         f"{BACKEND}/sessions/{session_id}/export",
-        params={"format": fmt},
+        params={"format": fmt, "user_email": st.user.email},
         timeout=15.0,
     )
     r.raise_for_status()
