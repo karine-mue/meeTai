@@ -8,14 +8,26 @@ listing, exporting, and later usage tracking.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+DEFAULT_TIMEZONE = "Asia/Tokyo"
+
+
+def _timezone() -> ZoneInfo:
+    name = os.getenv("APP_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo(DEFAULT_TIMEZONE)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(_timezone()).isoformat(timespec="seconds")
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -64,6 +76,9 @@ def init_archive(db_path: str) -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user_email ON sessions(user_email)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_messages_session_id ON session_messages(session_id)"
@@ -193,7 +208,7 @@ def append_messages(
 
 
 def _range_start(range_key: Optional[str]) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_timezone())
     lookup = {
         "7d": timedelta(days=7),
         "30d": timedelta(days=30),
@@ -207,12 +222,22 @@ def _month_bounds(month: str) -> tuple[str, str]:
     if not re.fullmatch(r"\d{4}-\d{2}", month):
         raise ValueError("month must be YYYY-MM")
     year, month_number = map(int, month.split("-"))
-    start = datetime(year, month_number, 1, tzinfo=timezone.utc)
+    tz = _timezone()
+    start = datetime(year, month_number, 1, tzinfo=tz)
     if month_number == 12:
-        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=tz)
     else:
-        end = datetime(year, month_number + 1, 1, tzinfo=timezone.utc)
+        end = datetime(year, month_number + 1, 1, tzinfo=tz)
     return start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")
+
+
+def _email_clause(allowed_user_emails: Optional[list[str]]) -> tuple[str, list[str]]:
+    if allowed_user_emails is None:
+        return "", []
+    if not allowed_user_emails:
+        return " AND 1 = 0", []
+    placeholders = ", ".join("?" for _ in allowed_user_emails)
+    return f" AND user_email IN ({placeholders})", allowed_user_emails
 
 
 def list_session_records(
@@ -221,31 +246,33 @@ def list_session_records(
     range_key: Optional[str] = "7d",
     month: Optional[str] = None,
     limit: int = 100,
+    allowed_user_emails: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
+    email_clause, email_params = _email_clause(allowed_user_emails)
     with _connect(db_path) as conn:
         if month:
             start, end = _month_bounds(month)
             rows = conn.execute(
-                """
+                f"""
                 SELECT *
                 FROM sessions
-                WHERE created_at >= ? AND created_at < ?
+                WHERE created_at >= ? AND created_at < ?{email_clause}
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (start, end, limit),
+                [start, end, *email_params, limit],
             ).fetchall()
         else:
             start = _range_start(range_key)
             rows = conn.execute(
-                """
+                f"""
                 SELECT *
                 FROM sessions
-                WHERE updated_at >= ?
+                WHERE updated_at >= ?{email_clause}
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (start, limit),
+                [start, *email_params, limit],
             ).fetchall()
 
     return [dict(row) for row in rows]
