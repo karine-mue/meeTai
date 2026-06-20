@@ -352,14 +352,17 @@ async def list_sessions(
     month: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    return {
-        "sessions": list_session_records(
+    try:
+        sessions = list_session_records(
             app.state.archive_db_path,
             range_key=range_key,
             month=month,
             limit=limit,
         )
-    }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {"sessions": sessions}
 
 @app.get("/sessions/{session_id}")
 async def get_session(session_id: str):
