@@ -5,6 +5,7 @@
 venv/
 .exports/
 .exports
+exports/
 
 # LangGraph Checkpoints (State DB)
 *.sqlite
@@ -19,3 +20,7 @@ __pycache__/
 # Logs & Minutes (if created dynamically)
 logs/
 minutes/
+
+# Secrets backups (退避先: ~/meetai-secrets-backup/)
+.env.bak.*
+.streamlit/secrets.toml.bak.*
