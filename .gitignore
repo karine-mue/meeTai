@@ -5,6 +5,7 @@
 venv/
 .exports/
 .exports
+exports/
 
 # LangGraph Checkpoints (State DB)
 *.sqlite
