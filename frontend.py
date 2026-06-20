@@ -295,6 +295,9 @@ def render_archive():
                 key="archive_month_input",
             ).strip()
             st.session_state.archive_month = month
+            if not month:
+                st.markdown("<div style='color:#555;font-size:12px;padding:8px 0'>年月を YYYY-MM で入力</div>", unsafe_allow_html=True)
+                return
 
         try:
             sessions = list_archived_sessions(
