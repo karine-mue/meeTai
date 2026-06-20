@@ -252,6 +252,56 @@ async def lifespan(app: FastAPI):
 # ==========
 app = FastAPI(title="Multi-AI Meeting", lifespan=lifespan)
 
+# ==========
+# Archive access scope
+# ==========
+def _normalize_email(email: Optional[str]) -> Optional[str]:
+    if not email:
+        return None
+    normalized = email.strip().lower()
+    return normalized or None
+
+
+def _archive_scope() -> str:
+    scope = os.getenv("SESSION_ARCHIVE_SCOPE", "user").strip().lower()
+    return scope if scope in {"user", "shared", "all"} else "user"
+
+
+def _shared_archive_emails() -> set[str]:
+    raw = os.getenv("SESSION_ARCHIVE_SHARED_EMAILS", "")
+    return {
+        e.strip().lower()
+        for e in raw.split(",")
+        if e.strip()
+    }
+
+
+def _allowed_archive_emails(requester_email: Optional[str]) -> Optional[list[str]]:
+    scope = _archive_scope()
+    if scope == "all":
+        return None
+
+    requester = _normalize_email(requester_email)
+    if requester is None:
+        return []
+
+    if scope == "shared":
+        shared = _shared_archive_emails()
+        if requester in shared:
+            return sorted(shared)
+
+    return [requester]
+
+
+def _assert_archive_visible(record: dict, requester_email: Optional[str]) -> None:
+    allowed = _allowed_archive_emails(requester_email)
+    if allowed is None:
+        return
+    owner = _normalize_email(record.get("user_email"))
+    if owner not in allowed:
+        raise HTTPException(status_code=404, detail="session not found")
+
+
 class StartPayload(BaseModel):
     session_id: str = Field(..., description="会議ID")
     participants: List[str] = Field(default_factory=lambda: ["gemini", "claude", "gpt"])
@@ -279,7 +329,7 @@ async def start_session(p: StartPayload):
         app.state.archive_db_path,
         session_id=p.session_id,
         title=p.title,
-        user_email=p.user_email,
+        user_email=_normalize_email(p.user_email),
         phase=p.phase,
         agents=p.participants,
     )
@@ -350,6 +400,7 @@ async def reconfigure(cp: ConfigPayload):
 async def list_sessions(
     range_key: Optional[str] = Query(default="7d", alias="range"),
     month: Optional[str] = None,
+    user_email: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ):
     try:
@@ -358,6 +409,7 @@ async def list_sessions(
             range_key=range_key,
             month=month,
             limit=limit,
+            allowed_user_emails=_allowed_archive_emails(user_email),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -365,17 +417,23 @@ async def list_sessions(
     return {"sessions": sessions}
 
 @app.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, user_email: Optional[str] = None):
     record = get_session_record(app.state.archive_db_path, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="session not found")
+    _assert_archive_visible(record, user_email)
     return record
 
 @app.get("/sessions/{session_id}/export")
-async def export_session(session_id: str, format: str = Query(default="markdown")):
+async def export_session(
+    session_id: str,
+    format: str = Query(default="markdown"),
+    user_email: Optional[str] = None,
+):
     record = get_session_record(app.state.archive_db_path, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="session not found")
+    _assert_archive_visible(record, user_email)
 
     if format == "json":
         return JSONResponse(record)
