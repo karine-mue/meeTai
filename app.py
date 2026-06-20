@@ -4,6 +4,7 @@ Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 - Reducer (operator.add) の導入によるコンテキストのサイレント破棄バグ修正
 - ノード関数からの差分返却（純粋関数化）によるイミュータビリティ確保
 - ainvoke(None) による適正な状態レジューム
+- セッション台帳とMarkdown export APIの追加
 """
 
 import os
@@ -12,8 +13,18 @@ from typing import Literal, TypedDict, List, Dict, Optional, Annotated
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
+
+from session_archive import (
+    append_messages,
+    create_session_record,
+    get_session_record,
+    init_archive,
+    list_session_records,
+    render_session_markdown,
+)
 
 # LangGraph
 from langgraph.graph import StateGraph, END
@@ -226,9 +237,12 @@ graph.add_edge("supervisor", "agent")
 graph.add_edge("agent", END)
 
 db_path = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
+archive_db_path = os.getenv("APP_DB", "meetai_app.sqlite")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_archive(archive_db_path)
+    app.state.archive_db_path = archive_db_path
     async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
         app.state.app_graph = graph.compile(checkpointer=checkpointer)
         yield
@@ -242,6 +256,8 @@ class StartPayload(BaseModel):
     session_id: str = Field(..., description="会議ID")
     participants: List[str] = Field(default_factory=lambda: ["gemini", "claude", "gpt"])
     phase: Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"] = "FREE"
+    title: Optional[str] = None
+    user_email: Optional[str] = None
 
 @app.post("/session")
 async def start_session(p: StartPayload):
@@ -259,6 +275,14 @@ async def start_session(p: StartPayload):
         values=state,
         as_node="__start__"
     )
+    create_session_record(
+        app.state.archive_db_path,
+        session_id=p.session_id,
+        title=p.title,
+        user_email=p.user_email,
+        phase=p.phase,
+        agents=p.participants,
+    )
     return {"ok": True, "session_id": p.session_id}
 
 class ChatPayload(BaseModel):
@@ -270,20 +294,29 @@ class ChatPayload(BaseModel):
 @app.post("/chat")
 async def send_chat(cp: ChatPayload):
     cfg = {"configurable": {"thread_id": cp.session_id}}
+    before = await app.state.app_graph.aget_state(config=cfg)
+    before_len = len(before.values.get("messages", [])) if before and before.values else 0
+    phase = cp.phase or "FREE"
+
     await app.state.app_graph.aupdate_state(
         config=cfg,
         values={
             "messages": [{"role": "user", "content": cp.text, "agent": "human"}],
-            "phase": cp.phase or "FREE",
+            "phase": phase,
             "read_only": cp.read_only
         },
         as_node="__start__"
     )
     # 適切なレジュームトリガー(None)を送信
-    out = await app.state.app_graph.ainvoke(None, config=cfg)
+    await app.state.app_graph.ainvoke(None, config=cfg)
     current = (await app.state.app_graph.aget_state(config=cfg)).values
+    all_messages = current.get("messages", [])
+    new_messages = [m for m in all_messages[before_len:] if m.get("role") != "system"]
+    if new_messages:
+        append_messages(app.state.archive_db_path, cp.session_id, new_messages, phase=phase)
+
     return {
-        "messages": current.get("messages", [])[-5:],
+        "messages": all_messages[-5:],
         "phase": current.get("phase"),
         "need_human": current.get("need_human"),
         "next_agent": current.get("next_agent")
@@ -312,6 +345,42 @@ async def reconfigure(cp: ConfigPayload):
             if hasattr(REGISTRY, k):
                 getattr(REGISTRY, k).enabled = bool(v)
     return {"ok": True}
+
+@app.get("/sessions")
+async def list_sessions(
+    range_key: Optional[str] = Query(default="7d", alias="range"),
+    month: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    return {
+        "sessions": list_session_records(
+            app.state.archive_db_path,
+            range_key=range_key,
+            month=month,
+            limit=limit,
+        )
+    }
+
+@app.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    record = get_session_record(app.state.archive_db_path, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return record
+
+@app.get("/sessions/{session_id}/export")
+async def export_session(session_id: str, format: str = Query(default="markdown")):
+    record = get_session_record(app.state.archive_db_path, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    if format == "json":
+        return JSONResponse(record)
+    if format == "markdown":
+        markdown = render_session_markdown(record)
+        return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
+
+    raise HTTPException(status_code=400, detail="format must be markdown or json")
 
 @app.get("/health")
 async def health():
