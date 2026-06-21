@@ -3,6 +3,16 @@
 .streamlit/secrets.toml
 .venv/
 venv/
+
+# Accidentally-created virtualenv roots at repository root
+/bin/
+/pyvenv.cfg
+/lib/python*/
+/lib64
+/share/jupyter/
+/etc/jupyter/
+
+# Exports
 .exports/
 .exports
 exports/
