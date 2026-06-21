@@ -358,30 +358,25 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
         partial=text,
     )
 
-_GPT_MAX_COMPLETION = re.compile(r"^gpt-5")
+_GPT_REASONING = re.compile(r"^gpt-5")
 _GPT_NO_TEMPERATURE = re.compile(r"^gpt-5\.5")
 
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
-    model = os.getenv("GPT_MODEL", "gpt-5.4")
+    model = os.getenv("GPT_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5.4")
     reasoning_effort = os.getenv("GPT_REASONING_EFFORT", "high")
     body: dict = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": sys},
-            {"role": "user",   "content": prompt},
-        ],
+        "instructions": sys,
+        "input": prompt,
+        "max_output_tokens": max_tokens,
     }
-    if _GPT_MAX_COMPLETION.match(model):
-        body["max_completion_tokens"] = max_tokens
-    else:
-        body["max_tokens"] = max_tokens
+    if _GPT_REASONING.match(model):
+        body["reasoning"] = {"effort": reasoning_effort}
     if not _GPT_NO_TEMPERATURE.match(model):
         body["temperature"] = 0
-    if _GPT_MAX_COMPLETION.match(model):
-        body["reasoning_effort"] = reasoning_effort
     async with httpx.AsyncClient() as client:
         r = await client.post(
-            "https://api.openai.com/v1/chat/completions",
+            "https://api.openai.com/v1/responses",
             headers={
                 "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
                 "Content-Type": "application/json",
@@ -391,13 +386,20 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
         )
         r.raise_for_status()
     data = r.json()
-    content = data["choices"][0]["message"]["content"] or ""
-    finish_reason = data["choices"][0].get("finish_reason")
-    if content and finish_reason in {None, "stop"}:
+    status = data.get("status")
+    content = "".join(
+        part["text"]
+        for item in data.get("output", [])
+        if item.get("type") == "message"
+        for part in item.get("content", [])
+        if part.get("type") == "output_text" and part.get("text")
+    )
+    if content and status == "completed":
         return content.strip()
+    incomplete_reason = (data.get("incomplete_details") or {}).get("reason")
     raise IncompleteLLMResponse(
-        f"GPT incomplete response: finish_reason={finish_reason or 'unknown'}, partial={content[:200]!r}",
-        finish_reason=finish_reason,
+        f"GPT incomplete response: status={status or 'unknown'}, reason={incomplete_reason or 'unknown'}, partial={content[:200]!r}",
+        finish_reason=incomplete_reason or status,
         partial=content,
     )
 
