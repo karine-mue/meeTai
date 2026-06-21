@@ -122,15 +122,39 @@ PHASE_PROMPTS: dict[str, str] = {
 # ==========
 # Agent registry
 # ==========
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _agent_max_tokens(agent: str, default: int = 4096) -> int:
+    shared = _env_int("LLM_MAX_TOKENS", default)
+    return _env_int(f"{agent.upper()}_MAX_TOKENS", shared)
+
+
 class AgentConfig(BaseModel):
     enabled: bool = True
-    max_tokens: int = 2000
+    max_tokens: int = 4096
     system_prompt: Optional[str] = None
 
 class Registry(BaseModel):
-    gemini: AgentConfig = AgentConfig(enabled=bool(os.getenv("GOOGLE_API_KEY")))
-    claude: AgentConfig = AgentConfig(enabled=bool(os.getenv("ANTHROPIC_API_KEY")))
-    gpt:    AgentConfig = AgentConfig(enabled=GPT_AVAILABLE)
+    gemini: AgentConfig = AgentConfig(
+        enabled=bool(os.getenv("GOOGLE_API_KEY")),
+        max_tokens=_agent_max_tokens("gemini"),
+    )
+    claude: AgentConfig = AgentConfig(
+        enabled=bool(os.getenv("ANTHROPIC_API_KEY")),
+        max_tokens=_agent_max_tokens("claude"),
+    )
+    gpt:    AgentConfig = AgentConfig(
+        enabled=GPT_AVAILABLE,
+        max_tokens=_agent_max_tokens("gpt"),
+    )
 
 REGISTRY = Registry()
 
@@ -204,8 +228,21 @@ def _finish_reason_name(reason: Any) -> Optional[str]:
     name = getattr(reason, "name", None)
     if name:
         return str(name)
+    value = getattr(reason, "value", None)
+    if isinstance(value, str):
+        return value
     text = str(reason)
     return text.rsplit(".", 1)[-1]
+
+
+def _gemini_stop_reason(reason: Any) -> bool:
+    finish_reason_enum = getattr(genai_types, "FinishReason", None)
+    stop_reason = getattr(finish_reason_enum, "STOP", None) if finish_reason_enum else None
+    if stop_reason is not None and reason == stop_reason:
+        return True
+
+    name = _finish_reason_name(reason)
+    return name is not None and name.upper() in {"STOP", "FINISH_REASON_STOP"}
 
 
 def _gemini_candidate(resp: Any) -> Any:
@@ -232,45 +269,77 @@ def _gemini_text(resp: Any, candidate: Any) -> str:
         return _gemini_parts_text(candidate)
 
 
-def _is_gemini_complete(finish_reason: Optional[str], text: str) -> bool:
+def _is_gemini_complete(reason: Any, text: str) -> bool:
     if not text:
         return False
-    if finish_reason is None:
+    if reason is None:
         # Older SDKs or unusual response shapes may not expose finish_reason.
         # Treat a non-empty text as complete instead of failing every Gemini call.
         return True
-    return finish_reason.upper() in {"STOP", "FINISH_REASON_STOP"}
+    return _gemini_stop_reason(reason)
+
+
+def _gemini_thinking_budget(model: str) -> Optional[int]:
+    raw = os.getenv("GEMINI_THINKING_BUDGET")
+    if raw is None:
+        # Gemini 2.5 Flash defaults to dynamic thinking, which can consume visible output budget.
+        return 0 if model.startswith("gemini-2.5-flash") else None
+
+    value = raw.strip().lower()
+    if value in {"", "none", "default"}:
+        return None
+    if value in {"auto", "dynamic"}:
+        return -1
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _gemini_thinking_config(model: str) -> Any:
+    budget = _gemini_thinking_budget(model)
+    thinking_config_type = getattr(genai_types, "ThinkingConfig", None)
+    if budget is None or thinking_config_type is None:
+        return None
+    return thinking_config_type(thinking_budget=budget)
 
 
 async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
     if _gemini_client is None:
         raise RuntimeError("Gemini client not initialized")
 
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    config_kwargs = {
+        "system_instruction": sys,
+        "max_output_tokens": max_tokens,
+    }
+    thinking_config = _gemini_thinking_config(model)
+    if thinking_config is not None:
+        config_kwargs["thinking_config"] = thinking_config
+
     last_error: Optional[IncompleteLLMResponse] = None
     for attempt in range(2):
         resp = await _gemini_client.aio.models.generate_content(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            model=model,
             contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=sys,
-                max_output_tokens=max_tokens,
-            )
+            config=genai_types.GenerateContentConfig(**config_kwargs)
         )
         candidate = _gemini_candidate(resp)
-        finish_reason = _finish_reason_name(getattr(candidate, "finish_reason", None))
+        finish_reason = getattr(candidate, "finish_reason", None)
+        finish_reason_name = _finish_reason_name(finish_reason)
         text = _gemini_text(resp, candidate)
         if _is_gemini_complete(finish_reason, text):
             return text
 
         partial = text[:200]
         last_error = IncompleteLLMResponse(
-            f"Gemini incomplete response: finish_reason={finish_reason or 'unknown'}, partial={partial!r}",
-            finish_reason=finish_reason,
+            f"Gemini incomplete response: finish_reason={finish_reason_name or 'unknown'}, partial={partial!r}",
+            finish_reason=finish_reason_name,
             partial=text,
         )
 
-        # One retry is useful for MAX_TOKENS / transient partial candidates. Safety-like reasons
-        # will normally fail again, but keeping a single path avoids saving a broken partial.
+        # One retry is useful for transient partial candidates. If the cause is a hard
+        # max-token / safety stop, the retry will fail again but no broken partial is saved.
         if attempt == 0:
             continue
 
@@ -283,7 +352,17 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
         system=sys,
         messages=[{"role": "user", "content": prompt}]
     )
-    return resp.content[0].text.strip()
+    text = "".join(getattr(block, "text", "") for block in resp.content).strip()
+    stop_reason = getattr(resp, "stop_reason", None)
+
+    if text and stop_reason in {None, "end_turn", "stop_sequence"}:
+        return text
+
+    raise IncompleteLLMResponse(
+        f"Claude incomplete response: stop_reason={stop_reason or 'unknown'}, partial={text[:200]!r}",
+        finish_reason=stop_reason,
+        partial=text,
+    )
 
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
     llm = ChatOpenAI(
