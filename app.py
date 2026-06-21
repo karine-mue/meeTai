@@ -10,7 +10,8 @@ Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 import os
 import asyncio
 import operator
-from typing import Literal, TypedDict, List, Dict, Optional, Annotated
+import re
+from typing import Literal, TypedDict, List, Dict, Optional, Annotated, Any
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -121,15 +122,39 @@ PHASE_PROMPTS: dict[str, str] = {
 # ==========
 # Agent registry
 # ==========
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _agent_max_tokens(agent: str, default: int = 4096) -> int:
+    shared = _env_int("LLM_MAX_TOKENS", default)
+    return _env_int(f"{agent.upper()}_MAX_TOKENS", shared)
+
+
 class AgentConfig(BaseModel):
     enabled: bool = True
-    max_tokens: int = 2000
+    max_tokens: int = 4096
     system_prompt: Optional[str] = None
 
 class Registry(BaseModel):
-    gemini: AgentConfig = AgentConfig(enabled=bool(os.getenv("GOOGLE_API_KEY")))
-    claude: AgentConfig = AgentConfig(enabled=bool(os.getenv("ANTHROPIC_API_KEY")))
-    gpt:    AgentConfig = AgentConfig(enabled=GPT_AVAILABLE)
+    gemini: AgentConfig = AgentConfig(
+        enabled=bool(os.getenv("GOOGLE_API_KEY")),
+        max_tokens=_agent_max_tokens("gemini"),
+    )
+    claude: AgentConfig = AgentConfig(
+        enabled=bool(os.getenv("ANTHROPIC_API_KEY")),
+        max_tokens=_agent_max_tokens("claude"),
+    )
+    gpt:    AgentConfig = AgentConfig(
+        enabled=GPT_AVAILABLE,
+        max_tokens=_agent_max_tokens("gpt"),
+    )
 
 REGISTRY = Registry()
 
@@ -190,18 +215,130 @@ def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
 # ==========
 # LLM callers
 # ==========
+class IncompleteLLMResponse(RuntimeError):
+    def __init__(self, message: str, *, finish_reason: Optional[str] = None, partial: str = ""):
+        super().__init__(message)
+        self.finish_reason = finish_reason
+        self.partial = partial
+
+
+def _finish_reason_name(reason: Any) -> Optional[str]:
+    if reason is None:
+        return None
+    name = getattr(reason, "name", None)
+    if name:
+        return str(name)
+    value = getattr(reason, "value", None)
+    if isinstance(value, str):
+        return value
+    text = str(reason)
+    return text.rsplit(".", 1)[-1]
+
+
+def _gemini_stop_reason(reason: Any) -> bool:
+    finish_reason_enum = getattr(genai_types, "FinishReason", None)
+    stop_reason = getattr(finish_reason_enum, "STOP", None) if finish_reason_enum else None
+    if stop_reason is not None and reason == stop_reason:
+        return True
+
+    name = _finish_reason_name(reason)
+    return name is not None and name.upper() in {"STOP", "FINISH_REASON_STOP"}
+
+
+def _gemini_candidate(resp: Any) -> Any:
+    candidates = getattr(resp, "candidates", None) or []
+    return candidates[0] if candidates else None
+
+
+def _gemini_parts_text(candidate: Any) -> str:
+    content = getattr(candidate, "content", None)
+    parts = getattr(content, "parts", None) or []
+    texts = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if text:
+            texts.append(text)
+    return "".join(texts).strip()
+
+
+def _gemini_text(resp: Any, candidate: Any) -> str:
+    try:
+        return (resp.text or "").strip()
+    except Exception:
+        # google-genai may reject resp.text access when the candidate is not a complete text response.
+        return _gemini_parts_text(candidate)
+
+
+def _is_gemini_complete(reason: Any, text: str) -> bool:
+    if not text:
+        return False
+    if reason is None:
+        # Older SDKs or unusual response shapes may not expose finish_reason.
+        # Treat a non-empty text as complete instead of failing every Gemini call.
+        return True
+    return _gemini_stop_reason(reason)
+
+
+def _gemini_thinking_budget(model: str) -> Optional[int]:
+    raw = os.getenv("GEMINI_THINKING_BUDGET")
+    if raw is None:
+        # Gemini 2.5 Flash defaults to dynamic thinking, which can consume visible output budget.
+        return 0 if model.startswith("gemini-2.5-flash") else None
+
+    value = raw.strip().lower()
+    if value in {"", "none", "default"}:
+        return None
+    if value in {"auto", "dynamic"}:
+        return -1
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _gemini_thinking_config(model: str) -> Any:
+    budget = _gemini_thinking_budget(model)
+    thinking_config_type = getattr(genai_types, "ThinkingConfig", None)
+    if budget is None or thinking_config_type is None:
+        return None
+    return thinking_config_type(thinking_budget=budget)
+
+
 async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
     if _gemini_client is None:
         raise RuntimeError("Gemini client not initialized")
-    resp = await _gemini_client.aio.models.generate_content(
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            system_instruction=sys,
-            max_output_tokens=max_tokens,
+
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    config_kwargs = {
+        "system_instruction": sys,
+        "max_output_tokens": max_tokens,
+    }
+    thinking_config = _gemini_thinking_config(model)
+    if thinking_config is not None:
+        config_kwargs["thinking_config"] = thinking_config
+
+    last_error: Optional[IncompleteLLMResponse] = None
+    for _ in range(2):
+        resp = await _gemini_client.aio.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(**config_kwargs)
         )
-    )
-    return (resp.text or "").strip()
+        candidate = _gemini_candidate(resp)
+        finish_reason = getattr(candidate, "finish_reason", None)
+        finish_reason_name = _finish_reason_name(finish_reason)
+        text = _gemini_text(resp, candidate)
+        if _is_gemini_complete(finish_reason, text):
+            return text
+
+        partial = text[:200]
+        last_error = IncompleteLLMResponse(
+            f"Gemini incomplete response: finish_reason={finish_reason_name or 'unknown'}, partial={partial!r}",
+            finish_reason=finish_reason_name,
+            partial=text,
+        )
+
+    raise last_error or IncompleteLLMResponse("Gemini empty response", finish_reason=None, partial="")
 
 async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
     resp = await anthropic_client.messages.create(
@@ -210,7 +347,17 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
         system=sys,
         messages=[{"role": "user", "content": prompt}]
     )
-    return resp.content[0].text.strip()
+    text = "".join(getattr(block, "text", "") for block in resp.content).strip()
+    stop_reason = getattr(resp, "stop_reason", None)
+
+    if text and stop_reason in {None, "end_turn", "stop_sequence"}:
+        return text
+
+    raise IncompleteLLMResponse(
+        f"Claude incomplete response: stop_reason={stop_reason or 'unknown'}, partial={text[:200]!r}",
+        finish_reason=stop_reason,
+        partial=text,
+    )
 
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
     llm = ChatOpenAI(
@@ -227,6 +374,39 @@ CALLERS = {
     "claude": call_claude,
     "gpt":    call_gpt,
 }
+
+# ==========
+# Completion / archive guards
+# ==========
+def _error_content(content: str) -> bool:
+    return content.startswith("[error]") or re.match(r"^\[[A-Za-z0-9_-]+\] error:", content) is not None
+
+
+def _archivable_message(message: dict[str, Any]) -> bool:
+    role = message.get("role")
+    content = message.get("content") or ""
+    if role == "user":
+        return bool(content)
+    if role == "assistant":
+        return bool(content) and not _error_content(content)
+    return False
+
+
+def _response_ok(response: dict[str, Any]) -> bool:
+    content = response.get("content") or ""
+    return response.get("ok", True) is not False and bool(content) and not _error_content(content)
+
+
+def _error_response(agent: str, exc: Exception) -> dict[str, Any]:
+    finish_reason = getattr(exc, "finish_reason", None)
+    message = str(exc)
+    return {
+        "agent": agent,
+        "content": f"[error] {message}",
+        "ok": False,
+        "finish_reason": finish_reason,
+        "error": message,
+    }
 
 # ==========
 # Supervisor node
@@ -430,8 +610,9 @@ async def send_chat(cp: ChatPayload):
     current = (await app.state.app_graph.aget_state(config=cfg)).values
     all_messages = current.get("messages", [])
     new_messages = [m for m in all_messages[before_len:] if m.get("role") != "system"]
-    if new_messages:
-        append_messages(app.state.archive_db_path, cp.session_id, new_messages, phase=phase)
+    archived_messages = [m for m in new_messages if _archivable_message(m)]
+    if archived_messages:
+        append_messages(app.state.archive_db_path, cp.session_id, archived_messages, phase=phase)
 
     return {
         "messages": all_messages[-5:],
@@ -464,29 +645,35 @@ async def ask_all(p: AskAllPayload):
     default_agents = session_targets or available_agents_sync()
     participants = [a for a in (p.participants or default_agents) if hasattr(REGISTRY, a)]
 
-    async def call_one(agent: str):
+    async def call_one(agent: str) -> Optional[dict[str, Any]]:
         cfg: AgentConfig = getattr(REGISTRY, agent)
         if not cfg.enabled:
-            return agent, None
+            return None
         caller = CALLERS.get(agent)
         if caller is None:
-            return agent, None
+            return None
         sys_prompt = resolve_sys_prompt(agent, phase, cfg)
         try:
             text = await caller(context_prompt, sys_prompt, cfg.max_tokens)
-            return agent, text
+            return {
+                "agent": agent,
+                "content": text,
+                "ok": True,
+                "finish_reason": None,
+                "error": None,
+            }
         except Exception as e:
-            return agent, f"[error] {e}"
+            return _error_response(agent, e)
 
     results = await asyncio.gather(*[call_one(a) for a in participants])
-    responses = [{"agent": a, "content": c} for a, c in results if c is not None]
+    responses = [r for r in results if r is not None]
 
     return {"responses": responses, "phase": phase}
 
 class CommitPayload(BaseModel):
     session_id: str
     human_text: str
-    responses: List[Dict[str, str]]
+    responses: List[Dict[str, Any]]
     phase: Optional[Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]] = None
 
 @app.post("/commit")
@@ -497,9 +684,9 @@ async def commit_fanout(p: CommitPayload):
     messages_to_add: List[Message] = [
         {"role": "user", "content": p.human_text, "agent": "human"},
         *[
-            {"role": "assistant", "content": r["content"], "agent": r["agent"]}
+            {"role": "assistant", "content": str(r["content"]), "agent": str(r["agent"])}
             for r in p.responses
-            if r.get("content") and not r["content"].startswith("[error]")
+            if _response_ok(r)
         ],
     ]
 
