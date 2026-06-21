@@ -318,7 +318,7 @@ async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
         config_kwargs["thinking_config"] = thinking_config
 
     last_error: Optional[IncompleteLLMResponse] = None
-    for attempt in range(2):
+    for _ in range(2):
         resp = await _gemini_client.aio.models.generate_content(
             model=model,
             contents=prompt,
@@ -337,11 +337,6 @@ async def call_gemini(prompt: str, sys: str, max_tokens: int) -> str:
             finish_reason=finish_reason_name,
             partial=text,
         )
-
-        # One retry is useful for transient partial candidates. If the cause is a hard
-        # max-token / safety stop, the retry will fail again but no broken partial is saved.
-        if attempt == 0:
-            continue
 
     raise last_error or IncompleteLLMResponse("Gemini empty response", finish_reason=None, partial="")
 
