@@ -1,4 +1,12 @@
-"""Multi-AI Meeting Frontend (Streamlit)."""
+"""
+Multi-AI Meeting Frontend (Streamlit)
+- フェーズボタン（FREE/CONTEXT/CRITIQUE/SYNTHESIS）
+- 送信先選択（Radio：1ターン1エージェント）
+- 全員に聞く fan-out
+- 各AI応答表示
+- スマホ縦持ち対応
+- FastAPI (app.py :8008) をバックエンドとして使用
+"""
 
 import html
 import json
@@ -11,6 +19,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 import streamlit as st
 
+# ----------
+# 設定
+# ----------
 BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8008")
 AGENTS = ["gemini", "claude", "gpt"]
 PHASES = ["FREE", "CONTEXT", "CRITIQUE", "SYNTHESIS"]
@@ -25,6 +36,9 @@ AGENT_COLOR = {
     "system": "#444444",
 }
 
+# ----------
+# ページ設定
+# ----------
 st.set_page_config(
     page_title="AI Meeting",
     page_icon="⬡",
@@ -32,6 +46,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ----------
+# スタイル
+# ----------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700&display=swap');
@@ -165,7 +182,9 @@ hr {
 </style>
 """, unsafe_allow_html=True)
 
-
+# ----------
+# 認証
+# ----------
 if not st.user.is_logged_in:
     st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
     if st.button("Google でログイン", use_container_width=False):
@@ -183,6 +202,9 @@ if st.user.email not in ALLOWED_EMAILS:
     st.stop()
 
 
+# ----------
+# セッション初期化
+# ----------
 def init_state():
     defaults = {
         "session_id": None,
@@ -202,6 +224,9 @@ def init_state():
             st.session_state[key] = value
 
 
+# ----------
+# バックエンド接続
+# ----------
 def app_timezone():
     name = os.getenv("APP_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
     try:
@@ -288,6 +313,9 @@ def get_health():
         return {}
 
 
+# ----------
+# UI helpers
+# ----------
 def safe_filename(title, session_id, ext):
     base = re.sub(r"[^0-9A-Za-zぁ-んァ-ン一-龥ー_-]+", "_", title).strip("_") or session_id
     return f"{base}_{session_id}.{ext}"
@@ -340,6 +368,9 @@ def archive_params(range_choice, month):
     return params
 
 
+# ----------
+# archive
+# ----------
 def render_archive():
     with st.expander("ARCHIVE / past sessions", expanded=False):
         labels = {
@@ -445,8 +476,15 @@ def render_archive():
             )
 
 
+# ----------
+# UI
+# ----------
 init_state()
+
+# ヘッダー
 st.markdown("<h2 style='margin:0;padding:12px 0 4px'>⬡ meeTai</h2>", unsafe_allow_html=True)
+
+# ヘルスチェック＆セッション開始
 health = get_health()
 render_archive()
 
@@ -457,6 +495,7 @@ if not st.session_state.session_id:
     )
     title = st.text_input("SESSION TITLE", placeholder="例: API利用上限の設計", label_visibility="visible")
 
+    # 参加者選択
     selected = []
     agent_cols = st.columns(3)
     for i, agent in enumerate(AGENTS):
@@ -480,11 +519,15 @@ if not st.session_state.session_id:
                 st.error(f"接続失敗: {e}")
     st.stop()
 
+# ----------
+# セッション中
+# ----------
 st.markdown(
     f"<div class='status-bar'>SESSION {st.session_state.session_id[-8:]} · PHASE {st.session_state.phase}</div>",
     unsafe_allow_html=True,
 )
 
+# フェーズボタン
 st.markdown(
     "<div style='margin:8px 0 4px;font-size:10px;color:#444;letter-spacing:.1em'>PHASE</div>",
     unsafe_allow_html=True,
@@ -497,13 +540,19 @@ for i, phase in enumerate(PHASES):
             st.rerun()
 
 st.markdown("<hr>", unsafe_allow_html=True)
+
+# 送信先選択（Radio：1ターン1エージェント、コンテキスト汚染を防ぐ）
 st.markdown(
     "<div style='font-size:10px;color:#444;letter-spacing:.1em;margin-bottom:4px'>SEND TO</div>",
     unsafe_allow_html=True,
 )
 agent_options = [f"{'●' if health.get(a) else '○'} {a}" for a in AGENTS]
 target = st.radio("", agent_options, horizontal=True, label_visibility="collapsed").split(" ")[-1]
+
+# read-only トグル
 read_only = st.toggle("read-only（文脈共有のみ、応答なし）", value=False)
+
+# 入力欄（clear_countをkeyに含めることでCLEARボタン押下時に強制リセット）
 user_input = st.text_area(
     "",
     placeholder="入力...",
@@ -512,6 +561,7 @@ user_input = st.text_area(
     key=f"input_{st.session_state.clear_count}",
 )
 
+# 送信 / 全員に聞く / クリア
 send_col, fanout_col, clear_col = st.columns([2, 2, 1])
 with send_col:
     send_btn = st.button("SEND ▶", use_container_width=True, type="primary", disabled=st.session_state.sending)
@@ -525,10 +575,12 @@ with clear_col:
 if send_btn and user_input.strip() and not st.session_state.sending:
     st.session_state.sending = True
     with st.spinner("dispatching..."):
+        # humanメッセージを先に議事録へ（時系列の正順を保持）
         st.session_state.minutes.append({"role": "user", "content": user_input, "agent": "human"})
         if read_only:
             try:
                 send_chat(user_input, st.session_state.phase, True)
+                # read-onlyはDBに積むだけ、応答なし
                 st.session_state.response_view = "MINUTES"
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -553,11 +605,15 @@ if send_btn and user_input.strip() and not st.session_state.sending:
 if fanout_btn and user_input.strip() and not st.session_state.sending:
     st.session_state.sending = True
     with st.spinner("fan-out dispatching..."):
+        # humanメッセージを先に議事録へ（時系列の正順を保持）
         st.session_state.minutes.append({"role": "user", "content": user_input, "agent": "human"})
         try:
             result = ask_all(user_input)
             responses = result.get("responses", [])
-            commit_fanout(user_input, responses, result.get("phase", st.session_state.phase))
+            phase_used = result.get("phase", st.session_state.phase)
+            commit_fanout(user_input, responses, phase_used)
+
+            # commit成功後にUIへ反映（backend/archiveとのズレを防ぐ）
             first_agent = None
             for r in responses:
                 agent, content = r.get("agent"), r.get("content", "")
@@ -573,6 +629,7 @@ if fanout_btn and user_input.strip() and not st.session_state.sending:
     st.session_state.clear_count += 1
     st.rerun()
 
+# need_human警告
 if st.session_state.need_human:
     st.markdown(
         "<div class='need-human'>⚠ No agent available — check API keys or agent selection</div>",
@@ -582,6 +639,10 @@ if st.session_state.need_human:
         st.session_state.need_human = False
 
 st.markdown("<hr>", unsafe_allow_html=True)
+
+# ----------
+# 応答表示
+# ----------
 st.markdown(
     "<div style='font-size:10px;color:#444;letter-spacing:.1em;margin-bottom:8px'>RESPONSES</div>",
     unsafe_allow_html=True,
@@ -627,6 +688,9 @@ else:
     else:
         st.markdown("<div class='empty-message'>no minutes yet</div>", unsafe_allow_html=True)
 
+# ----------
+# セッションリセット
+# ----------
 st.markdown("<hr>", unsafe_allow_html=True)
 if st.button("■  END SESSION", use_container_width=True):
     for key in ["session_id", "phase", "logs", "minutes", "need_human", "response_view"]:
