@@ -71,10 +71,13 @@ class MeetingState(TypedDict):
 
 DEFAULT_SYSTEM = "あなたはAIアシスタントです。"
 
-MEETING_OUTPUT_RULES = (
+DIRECT_ANSWER_RULE = (
     "ユーザーが具体案・候補・レシピ・プラン・比較結果・結論を求めている場合、"
     "「追加情報が必要」「次に提案する必要がある」と述べるだけで終えず、"
     "必ず現時点の情報と明示した仮定に基づいて具体案を提示してください。"
+)
+
+KDR_RULE = (
     "不足情報は Residue に回してよいが、Kernel/Diag/Residue のすべてを未確定事項だけで埋めないでください。"
     "Kernel にはその時点での暫定判断または提案を置いてください。"
     "Diag にはその根拠・比較・制約を置いてください。"
@@ -148,11 +151,14 @@ def available_agents_sync() -> List[str]:
 # ==========
 def resolve_sys_prompt(agent: str, phase: str, cfg: AgentConfig) -> str:
     base = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+    rules = DIRECT_ANSWER_RULE
+    if phase != "FREE":
+        rules += KDR_RULE
     return (
         f"{base}\n"
         f"あなたは現在 [{agent}] として発言しています。"
         f"会議ログ内の [{agent}] の発言はあなた自身のものです。\n"
-        f"{MEETING_OUTPUT_RULES}"
+        f"{rules}"
     )
 
 def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
