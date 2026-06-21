@@ -202,6 +202,8 @@ def init_state():
         st.session_state.archive_range = "7d"
     if "archive_month" not in st.session_state:
         st.session_state.archive_month = ""
+    if "session_participants" not in st.session_state:
+        st.session_state.session_participants = []
 
 init_state()
 
@@ -237,6 +239,26 @@ def send_chat(text, phase, read_only):
         "phase": phase,
         "read_only": read_only,
     }, timeout=120.0)
+    r.raise_for_status()
+    return r.json()
+
+def ask_all(text: str):
+    r = httpx.post(f"{BACKEND}/ask-all", json={
+        "session_id": st.session_state.session_id,
+        "text": text,
+        "phase": st.session_state.phase,
+        "participants": st.session_state.session_participants or None,
+    }, timeout=180.0)
+    r.raise_for_status()
+    return r.json()
+
+def commit_fanout(human_text: str, responses: list, phase: str):
+    r = httpx.post(f"{BACKEND}/commit", json={
+        "session_id": st.session_state.session_id,
+        "human_text": human_text,
+        "responses": responses,
+        "phase": phase,
+    }, timeout=30.0)
     r.raise_for_status()
     return r.json()
 
@@ -409,6 +431,7 @@ if not st.session_state.session_id:
             try:
                 sid = start_session(selected, session_title)
                 st.session_state.session_id = sid
+                st.session_state.session_participants = selected
                 st.session_state.logs = {a: [] for a in AGENTS}
                 st.session_state.minutes = []
                 st.session_state.need_human = False
@@ -456,14 +479,20 @@ user_input = st.text_area(
     key=f"input_{st.session_state.clear_count}",
 )
 
-# 送信 / クリア
-send_col, clear_col, _ = st.columns([2, 1, 2])
+# 送信 / 全員に聞く / クリア
+send_col, fanout_col, clear_col = st.columns([2, 2, 1])
 with send_col:
     send_btn = st.button(
         "SEND ▶",
         use_container_width=True,
         type="primary",
-        disabled=st.session_state.sending  # 送信中は非活性化
+        disabled=st.session_state.sending
+    )
+with fanout_col:
+    fanout_btn = st.button(
+        "全員に聞く ▶▶",
+        use_container_width=True,
+        disabled=st.session_state.sending,
     )
 with clear_col:
     if st.button("✕", use_container_width=True):
@@ -505,7 +534,32 @@ if send_btn and user_input.strip() and not st.session_state.sending:
                     "agent": target
                 })
     st.session_state.sending = False
-    st.session_state.clear_count += 1  # 送信成功後に入力欄をクリア
+    st.session_state.clear_count += 1
+    st.rerun()
+
+if fanout_btn and user_input.strip() and not st.session_state.sending:
+    st.session_state.sending = True
+    with st.spinner("fan-out dispatching..."):
+        st.session_state.minutes.append({
+            "role": "user", "content": user_input, "agent": "human"
+        })
+        try:
+            result = ask_all(user_input)
+            responses = result.get("responses", [])
+            phase_used = result.get("phase", st.session_state.phase)
+            commit_fanout(user_input, responses, phase_used)
+            # commit成功後にUIへ反映（backend/archiveとのズレを防ぐ）
+            for resp in responses:
+                agent = resp.get("agent")
+                content = resp.get("content", "")
+                if agent in st.session_state.logs:
+                    msg = {"role": "assistant", "content": content, "agent": agent}
+                    st.session_state.logs[agent].append(msg)
+                    st.session_state.minutes.append(msg)
+        except Exception as e:
+            st.error(f"fan-out error: {e}")
+    st.session_state.sending = False
+    st.session_state.clear_count += 1
     st.rerun()
 
 # need_human警告

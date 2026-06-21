@@ -8,6 +8,7 @@ Multi-AI Meeting Server (LangGraph版) - Asynchronous & Context-Aware Patch
 """
 
 import os
+import asyncio
 import operator
 from typing import Literal, TypedDict, List, Dict, Optional, Annotated
 from contextlib import asynccontextmanager
@@ -68,10 +69,54 @@ class MeetingState(TypedDict):
     need_human: bool
     meta: Dict
 
-DEFAULT_SYSTEM = (
-    "あなたはR&D会議の参加者です。発話は簡潔（最大600字）。"
-    "フェーズに従い、前提→仮説→反証→結論→次アクションの順で述べる。"
+DEFAULT_SYSTEM = "あなたはAIアシスタントです。"
+
+DIRECT_ANSWER_RULE = (
+    "ユーザーが具体案・候補・レシピ・プラン・比較結果・結論を求めている場合、"
+    "「追加情報が必要」「次に提案する必要がある」と述べるだけで終えず、"
+    "必ず現時点の情報と明示した仮定に基づいて具体案を提示してください。"
 )
+
+KDR_RULE = (
+    "不足情報は Residue に回してよいが、Kernel/Diag/Residue のすべてを未確定事項だけで埋めないでください。"
+    "Kernel にはその時点での暫定判断または提案を置いてください。"
+    "Diag にはその根拠・比較・制約を置いてください。"
+    "Residue には本当に未解決で次回へ送るものだけを置いてください。"
+)
+
+PHASE_PROMPTS: dict[str, str] = {
+    "FREE": (
+        "あなたはAIアシスタントです。"
+        "ユーザーの入力に直接答えてください。"
+        "会議形式・前提/仮説/反証/結論/次アクション形式は使わないでください。"
+        "回答は薄くしすぎず、ユーザーがそのまま使える具体性を持たせてください。"
+        "条件が示されている場合はそれを守ってください。"
+        "入力にない議題・評価実験・次アクションを追加しないでください。"
+    ),
+    "CONTEXT": (
+        # DIVERGE フェーズ: 他のメンバーの意見を見ずに独立して ∇(X) を出す
+        "あなたはR&D会議の参加者です。"
+        "お題に対して、他のメンバーの意見に影響されず、あなた独自の観点から応答してください。"
+        "Kernel（核となる主張・判断）、Diag（分析・根拠・観察）、Residue（未解決・保留・追加で必要な情報）の観点で整理してください。"
+        "結論を急がず、不明な点は仮定として明示してください。"
+        "ユーザーが具体案を求めている場合は、前提確認だけで終えず、必ず具体案を含めてください。不明点は仮定として明示し、Residueへ送ってください。"
+    ),
+    "CRITIQUE": (
+        # CROSS フェーズ: 共有された全応答を見て φ(responses) を出す
+        "あなたはR&D会議の参加者です。"
+        "ログに記録された他のメンバーの意見を比較し、共通点・差分・矛盾・補足を指摘してください。"
+        "Kernel（収束できる合意点）、Diag（議論のポイント・論点の差分）、Residue（未解決・次に必要なこと）を示してください。"
+        "形式的な構造埋めではなく、実際の差分や矛盾に絞って指摘してください。"
+        "ユーザーが具体案を求めている場合は、比較だけで終えず、あなた自身の改訂案または推奨案を出してください。"
+    ),
+    "SYNTHESIS": (
+        "あなたはR&D会議の参加者です。"
+        "議論全体を踏まえ、Decision/Kernel（合意・決定できること）、Diag（判断根拠）、Residue（次の会議に持ち越す未解決事項）を整理してください。"
+        "Residueは次の会議のテーマ候補として明示してください。"
+        "全部解決しようとせず、持ち越すものは持ち越す判断をしてください。"
+        "ユーザーが選択・提案・具体化を求めている場合は、Decision/Kernel に暫定結論または具体案を必ず置いてください。Residueだけを出して終わらないでください。"
+    ),
+}
 
 # ==========
 # Agent registry
@@ -79,7 +124,7 @@ DEFAULT_SYSTEM = (
 class AgentConfig(BaseModel):
     enabled: bool = True
     max_tokens: int = 2000
-    system_prompt: str = DEFAULT_SYSTEM
+    system_prompt: Optional[str] = None
 
 class Registry(BaseModel):
     gemini: AgentConfig = AgentConfig(enabled=bool(os.getenv("GOOGLE_API_KEY")))
@@ -104,7 +149,28 @@ def available_agents_sync() -> List[str]:
 # ==========
 # Context Builder
 # ==========
-def build_context_prompt(messages: List[Message]) -> str:
+def resolve_sys_prompt(agent: str, phase: str, cfg: AgentConfig) -> str:
+    base = cfg.system_prompt or PHASE_PROMPTS.get(phase, PHASE_PROMPTS["FREE"])
+    rules = DIRECT_ANSWER_RULE
+    if phase != "FREE":
+        rules += KDR_RULE
+    return (
+        f"{base}\n"
+        f"あなたは現在 [{agent}] として発言しています。"
+        f"会議ログ内の [{agent}] の発言はあなた自身のものです。\n"
+        f"{rules}"
+    )
+
+def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
+    if phase in {"FREE", "CONTEXT"}:
+        # ∇フェーズ (FREE/CONTEXT=DIVERGE): 同一ターン内の先行LLM応答を除外して盲目独立性を保つ
+        last_user_idx = max(
+            (i for i, m in enumerate(messages) if m["role"] == "user"),
+            default=-1,
+        )
+        messages = messages[: last_user_idx + 1] if last_user_idx >= 0 else messages
+    # φフェーズ (CRITIQUE=CROSS / SYNTHESIS): 全ログを渡す（比較・統合が目的）
+
     prompt = "【会議ログ（コンテキスト）】\n"
     has_user_input = False
     for m in messages:
@@ -198,10 +264,6 @@ async def agent_node(state: MeetingState) -> dict:
     if not agent:
         return {}
 
-    prompt = build_context_prompt(state.get("messages", []))
-    if not prompt:
-        return {"next_agent": None, "need_human": True}
-
     cfg: AgentConfig = getattr(REGISTRY, agent)
     caller = CALLERS.get(agent)
 
@@ -211,8 +273,14 @@ async def agent_node(state: MeetingState) -> dict:
             "need_human": True
         }
 
+    phase = state.get("phase", "FREE")
+    sys_prompt = resolve_sys_prompt(agent, phase, cfg)
+    prompt = build_context_prompt(state.get("messages", []), phase)
+    if not prompt:
+        return {"next_agent": None, "need_human": True}
+
     try:
-        text = await caller(prompt, cfg.system_prompt, cfg.max_tokens)
+        text = await caller(prompt, sys_prompt, cfg.max_tokens)
         return {
             "messages": [{"role": "assistant", "content": text, "agent": agent}],
             "next_agent": None,
@@ -312,7 +380,7 @@ class StartPayload(BaseModel):
 @app.post("/session")
 async def start_session(p: StartPayload):
     state = {
-        "messages": [{"role": "system", "content": DEFAULT_SYSTEM, "agent": "system"}],
+        "messages": [{"role": "system", "content": f"session:{p.session_id}", "agent": "system"}],
         "phase": p.phase,
         "target_agents": p.participants,
         "next_agent": None,
@@ -371,6 +439,80 @@ async def send_chat(cp: ChatPayload):
         "need_human": current.get("need_human"),
         "next_agent": current.get("next_agent")
     }
+
+class AskAllPayload(BaseModel):
+    session_id: str
+    text: str
+    participants: Optional[List[str]] = None
+    phase: Optional[Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]] = None
+
+@app.post("/ask-all")
+async def ask_all(p: AskAllPayload):
+    cfg_state = {"configurable": {"thread_id": p.session_id}}
+    current = await app.state.app_graph.aget_state(config=cfg_state)
+    state_values = current.values if current and current.values else {}
+    messages: List[Message] = state_values.get("messages", [])
+    phase: str = p.phase or state_values.get("phase", "FREE")
+
+    # 共有コンテキスト + 今回のユーザー入力でプロンプトを生成
+    # 各エージェントには同一コンテキストを渡す（先行応答はstateに未commit）
+    user_msg: Message = {"role": "user", "content": p.text, "agent": "human"}
+    context_prompt = build_context_prompt(messages + [user_msg], phase)
+
+    # セッション開始時の参加者を優先、なければ利用可能な全エージェント
+    session_targets: List[str] = state_values.get("target_agents") or []
+    default_agents = session_targets or available_agents_sync()
+    participants = [a for a in (p.participants or default_agents) if hasattr(REGISTRY, a)]
+
+    async def call_one(agent: str):
+        cfg: AgentConfig = getattr(REGISTRY, agent)
+        if not cfg.enabled:
+            return agent, None
+        caller = CALLERS.get(agent)
+        if caller is None:
+            return agent, None
+        sys_prompt = resolve_sys_prompt(agent, phase, cfg)
+        try:
+            text = await caller(context_prompt, sys_prompt, cfg.max_tokens)
+            return agent, text
+        except Exception as e:
+            return agent, f"[error] {e}"
+
+    results = await asyncio.gather(*[call_one(a) for a in participants])
+    responses = [{"agent": a, "content": c} for a, c in results if c is not None]
+
+    return {"responses": responses, "phase": phase}
+
+class CommitPayload(BaseModel):
+    session_id: str
+    human_text: str
+    responses: List[Dict[str, str]]
+    phase: Optional[Literal["CONTEXT", "CRITIQUE", "SYNTHESIS", "FREE"]] = None
+
+@app.post("/commit")
+async def commit_fanout(p: CommitPayload):
+    cfg = {"configurable": {"thread_id": p.session_id}}
+    phase = p.phase or "FREE"
+
+    messages_to_add: List[Message] = [
+        {"role": "user", "content": p.human_text, "agent": "human"},
+        *[
+            {"role": "assistant", "content": r["content"], "agent": r["agent"]}
+            for r in p.responses
+            if r.get("content") and not r["content"].startswith("[error]")
+        ],
+    ]
+
+    await app.state.app_graph.aupdate_state(
+        config=cfg,
+        values={"messages": messages_to_add, "phase": phase},
+        as_node="__start__"
+    )
+
+    append_messages(app.state.archive_db_path, p.session_id, messages_to_add, phase=phase)
+
+    return {"ok": True, "committed": len(messages_to_add)}
+
 
 class ConfigPayload(BaseModel):
     session_id: str
