@@ -81,19 +81,24 @@ PHASE_PROMPTS: dict[str, str] = {
         "入力にない議題・評価実験・次アクションを追加しないでください。"
     ),
     "CONTEXT": (
+        # DIVERGE フェーズ: 他のメンバーの意見を見ずに独立して ∇(X) を出す
         "あなたはR&D会議の参加者です。"
-        "議論の背景・制約・既知情報を整理し、判断材料を増やしてください。"
+        "お題に対して、他のメンバーの意見に影響されず、あなた独自の観点から応答してください。"
+        "Kernel（核となる主張・判断）、Diag（分析・根拠・観察）、Residue（未解決・保留・追加で必要な情報）の観点で整理してください。"
         "結論を急がず、不明な点は仮定として明示してください。"
     ),
     "CRITIQUE": (
+        # CROSS フェーズ: 共有された全応答を見て φ(responses) を出す
         "あなたはR&D会議の参加者です。"
-        "議論の弱点・リスク・抜けを指摘し、代替案を提示してください。"
-        "形式的な構造埋めは避けてください。"
+        "ログに記録された他のメンバーの意見を比較し、共通点・差分・矛盾・補足を指摘してください。"
+        "Kernel（収束できる合意点）、Diag（議論のポイント・論点の差分）、Residue（未解決・次に必要なこと）を示してください。"
+        "形式的な構造埋めではなく、実際の差分や矛盾に絞って指摘してください。"
     ),
     "SYNTHESIS": (
         "あなたはR&D会議の参加者です。"
-        "議論を統合し、残すべき判断材料を整理してください。"
-        "次アクションは必要な場合のみ提示してください。"
+        "議論全体を踏まえ、Decision/Kernel（合意・決定できること）、Diag（判断根拠）、Residue（次の会議に持ち越す未解決事項）を整理してください。"
+        "Residueは次の会議のテーマ候補として明示してください。"
+        "全部解決しようとせず、持ち越すものは持ち越す判断をしてください。"
     ),
 }
 
@@ -137,14 +142,14 @@ def resolve_sys_prompt(agent: str, phase: str, cfg: AgentConfig) -> str:
     )
 
 def build_context_prompt(messages: List[Message], phase: str = "FREE") -> str:
-    if phase == "FREE":
-        # 同一ターン内で先行LLMの応答がコンテキストに混入しないよう、
-        # 最後のユーザー入力より後のassistantメッセージを除外する
+    if phase in {"FREE", "CONTEXT"}:
+        # ∇フェーズ (FREE/CONTEXT=DIVERGE): 同一ターン内の先行LLM応答を除外して盲目独立性を保つ
         last_user_idx = max(
             (i for i, m in enumerate(messages) if m["role"] == "user"),
             default=-1,
         )
         messages = messages[: last_user_idx + 1] if last_user_idx >= 0 else messages
+    # φフェーズ (CRITIQUE=CROSS / SYNTHESIS): 全ログを渡す（比較・統合が目的）
 
     prompt = "【会議ログ（コンテキスト）】\n"
     has_user_input = False
