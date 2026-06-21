@@ -33,11 +33,11 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # SDKs
+import httpx
+
 from google import genai
 from google.genai import types as genai_types
 from anthropic import AsyncAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
 
 load_dotenv()
 
@@ -282,8 +282,7 @@ def _is_gemini_complete(reason: Any, text: str) -> bool:
 def _gemini_thinking_budget(model: str) -> Optional[int]:
     raw = os.getenv("GEMINI_THINKING_BUDGET")
     if raw is None:
-        # Gemini 2.5 Flash defaults to dynamic thinking, which can consume visible output budget.
-        return 0 if model.startswith("gemini-2.5-flash") else None
+        return None
 
     value = raw.strip().lower()
     if value in {"", "none", "default"}:
@@ -359,15 +358,48 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
         partial=text,
     )
 
+_GPT_MAX_COMPLETION = re.compile(r"^gpt-5")
+_GPT_NO_TEMPERATURE = re.compile(r"^gpt-5\.5")
+
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
-    llm = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-        max_tokens=max_tokens,
-        temperature=0.5
+    model = os.getenv("GPT_MODEL", "gpt-5.4")
+    reasoning_effort = os.getenv("GPT_REASONING_EFFORT", "high")
+    body: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user",   "content": prompt},
+        ],
+    }
+    if _GPT_MAX_COMPLETION.match(model):
+        body["max_completion_tokens"] = max_tokens
+    else:
+        body["max_tokens"] = max_tokens
+    if not _GPT_NO_TEMPERATURE.match(model):
+        body["temperature"] = 0
+    if _GPT_MAX_COMPLETION.match(model):
+        body["reasoning_effort"] = reasoning_effort
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=120.0,
+        )
+        r.raise_for_status()
+    data = r.json()
+    content = data["choices"][0]["message"]["content"] or ""
+    finish_reason = data["choices"][0].get("finish_reason")
+    if content and finish_reason in {None, "stop"}:
+        return content.strip()
+    raise IncompleteLLMResponse(
+        f"GPT incomplete response: finish_reason={finish_reason or 'unknown'}, partial={content[:200]!r}",
+        finish_reason=finish_reason,
+        partial=content,
     )
-    msgs = [SystemMessage(content=sys), HumanMessage(content=prompt)]
-    out = await llm.ainvoke(msgs)
-    return out.content.strip()
 
 CALLERS = {
     "gemini": call_gemini,
