@@ -19,6 +19,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from openai_gpt import (
+    OpenAIErrorInfo,
+    OpenAIRequestError,
+    build_gpt_request,
+    parse_openai_error,
+)
 from session_archive import (
     append_messages,
     create_session_record,
@@ -358,23 +364,18 @@ async def call_claude(prompt: str, sys: str, max_tokens: int) -> str:
         partial=text,
     )
 
-_GPT_REASONING = re.compile(r"^gpt-5")
-_GPT_NO_TEMPERATURE = re.compile(r"^gpt-5\.5")
+def _gpt_http_client() -> httpx.AsyncClient:
+    # test から MockTransport を差し込むための seam
+    return httpx.AsyncClient()
+
 
 async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
-    model = os.getenv("GPT_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5.4")
-    reasoning_effort = os.getenv("GPT_REASONING_EFFORT", "high")
-    body: dict = {
-        "model": model,
-        "instructions": sys,
-        "input": prompt,
-        "max_output_tokens": max_tokens,
-    }
-    if _GPT_REASONING.match(model):
-        body["reasoning"] = {"effort": reasoning_effort}
-    if not _GPT_NO_TEMPERATURE.match(model):
-        body["temperature"] = 0
-    async with httpx.AsyncClient() as client:
+    body = build_gpt_request(
+        prompt=prompt,
+        instructions=sys,
+        max_output_tokens=max_tokens,
+    )
+    async with _gpt_http_client() as client:
         r = await client.post(
             "https://api.openai.com/v1/responses",
             headers={
@@ -384,8 +385,10 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
             json=body,
             timeout=120.0,
         )
-        r.raise_for_status()
-    data = r.json()
+        # raise_for_status() は body を捨てるため、error JSON を先に構造化する
+        if r.is_error:
+            raise OpenAIRequestError(parse_openai_error(r.status_code, r.text))
+        data = r.json()
     status = data.get("status")
     content = "".join(
         part["text"]
@@ -413,6 +416,9 @@ CALLERS = {
 # Completion / archive guards
 # ==========
 def _error_content(content: str) -> bool:
+    # ここの 2 パターンは _error_response() と agent_node() が生成する prefix と
+    # 対になっている。prefix を変えるとエラーが正規の発言として archive / commit
+    # されるため、tests/test_call_gpt.py で両者を縛っている。
     return content.startswith("[error]") or re.match(r"^\[[A-Za-z0-9_-]+\] error:", content) is not None
 
 
@@ -434,13 +440,19 @@ def _response_ok(response: dict[str, Any]) -> bool:
 def _error_response(agent: str, exc: Exception) -> dict[str, Any]:
     finish_reason = getattr(exc, "finish_reason", None)
     message = str(exc)
-    return {
+    response: dict[str, Any] = {
         "agent": agent,
         "content": f"[error] {message}",
         "ok": False,
         "finish_reason": finish_reason,
         "error": message,
     }
+    # provider の error を構造化できる場合は field としても返す（/ask-all のみ）。
+    # content 側にも同じ情報が整形済みで入るため、/chat 経路と表示は揃う。
+    info = getattr(exc, "info", None)
+    if isinstance(info, OpenAIErrorInfo):
+        response["error_detail"] = info.as_dict()
+    return response
 
 # ==========
 # Supervisor node

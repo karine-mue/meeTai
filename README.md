@@ -47,7 +47,9 @@ FastAPI の非同期イベントループをブロックしないよう全クラ
 ~/python_app/.venv/
 ├── app.py              # バックエンド（FastAPI + LangGraph）
 ├── frontend.py         # フロントエンド（Streamlit）
+├── openai_gpt.py       # OpenAI model capability profile / request builder / error変換
 ├── exporter.py         # セッション履歴のCLI抽出ツール
+├── tests/              # pytest（実APIへは出ない）
 ├── requirements.txt
 ├── .env
 ├── checkpoints.sqlite  # セッション状態DB（WALモード）
@@ -218,7 +220,59 @@ curl -X POST http://127.0.0.1:8008/config \
 
 ---
 
+## テスト
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest
+```
+
+`pytest.ini` で `testpaths = tests` / `asyncio_mode = auto` を設定済みなので、引数なしの `pytest` で全件走る。実APIへは出ない（OpenAIは `httpx.MockTransport` で差し替え、APIキーは不要）。
+
+| ファイル | 対象 |
+|---|---|
+| `tests/test_openai_gpt.py` | model capability profile の解決、request body の組み立て、env優先順位、OpenAI error のパースとredaction |
+| `tests/test_call_gpt.py` | `call_gpt()` のHTTP error変換、`/chat`・`/ask-all` 両経路の診断保持、error発言がarchive/commitされないこと |
+
+---
+
 ## 既知の制約・設計上の注意
+
+**OpenAIの送信パラメータは `openai_gpt.py` に集約：**  
+モデルによって送れる optional parameter が変わる（GPT-5系reasoning modelは `temperature` を受け付けず400になる）。判定は `_CAPABILITY_PROFILES` の1箇所だけにあり、`app.py` 側に条件分岐を置かない。モデル追加時に触るのはこの表と対応するテストのみ。
+
+未登録のモデル名は **fail-closed**（必須fieldのみ送信、`reasoning`・`temperature` を付けない）で扱う。「名前が `gpt-5` で始まる」だけの理由でパラメータを送らないため、将来の `gpt-5.x` で同じ400が再発しない。
+
+**snapshotとvariantを区別する：**  
+profile解決は「完全一致 → 日付suffixを落として完全一致 → unknown」の3段で、prefix matchは使わない。
+
+| モデル名 | 解決先 | 理由 |
+|---|---|---|
+| `gpt-5.4-2026-03-05` | `gpt-5.4` | 日付suffix = snapshot。capabilityは同じ |
+| `gpt-5.4-pro` | `gpt-5.4-pro`（独立profile） | variant。reasoning effortが `medium`/`high`/`xhigh` のみでbaseと異なる |
+| `gpt-5.4-pro-2026-03-05` | `gpt-5.4-pro` | variantのsnapshot |
+| `gpt-5.4-turbo` 等の未登録variant | unknown（fail-closed） | 継承させない |
+
+「`gpt-5.4-` で始まればbaseと同じ」という規則ではsnapshotとvariantが同じprofileに落ち、`gpt-5.4-pro` へ未対応の effort を送りうる。variantは1行ずつ明示登録する。
+
+**reasoning effortのwhitelistは狭い側に倒す：**  
+許容値はmodelごとに独立して定義する（共有定数にすると1モデルの実測値が他モデルへ黙って伝播する）。外し方は非対称で、**広すぎる方が危険**。
+
+- 広すぎる → 未対応値をそのまま送って400（Issue #23と同じ不具合）
+- 狭すぎる → `default_reasoning_effort` へ退避するだけで400にはならない
+
+`gpt-5.4` / `gpt-5.4-pro` は現行仕様と突き合わせ済み。`gpt-5` / `gpt-5.5` は未検証なので `low`/`medium`/`high` のみ許可し、`none`/`minimal`/`xhigh` は検証できるまで除外している。
+
+**reasoning modelの `max_output_tokens`（明示設定を上書きする）：**  
+reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さいとreasoningだけで使い切り、本文が1文字も返らないまま `status=incomplete` / `reason=max_output_tokens` になる。profileの下限（`REASONING_MIN_OUTPUT_TOKENS` = 16384）まで自動で引き上げる。
+
+**`GPT_MAX_TOKENS` / `LLM_MAX_TOKENS` に16384未満を明示指定しても引き上げられる。** この数値は測定値ではなく heuristic で、根拠として言えるのは「従来の既定4096は失敗域にある（effort=highのreasoningだけで到達する）」「meeTaiの応答はKernel/Diag/Residue構造で短くないため、reasoningを賄った上で本文にも数千token残る必要がある」の2点のみ。適正値はmodel・effort・prompt長で動くので「これ以上なら安全」という閾値は存在せず、「これ未満はほぼ確実に壊れる」側の下限として置いている。
+
+コスト実験などで意図的に小さいbudgetを使いたい場合は `openai_gpt.py` の定数を下げる。env側に逃げ道は用意していない——reasoning modelに小さいbudgetを渡すのは「空応答を受け入れる」判断であり、設定ミスと区別できないため。
+
+**エラー発言のprefixは `_error_content()` と対：**  
+`_error_response()` の `[error] ` と `agent_node()` の `[{agent}] error: ` は `_error_content()` の判定パターンと対になっている。ここを変えるとエラーが正規のAI発言としてarchive/commitされる（サイレントなログ汚染）。`tests/test_call_gpt.py` で両者を縛っている。
 
 **1ターン1エージェント制約：**  
 バックエンドのグラフが `supervisor → agent → END` のシングルターン構造のため、1回の `/chat` で応答するエージェントは1つ。
@@ -246,6 +300,8 @@ ollamaはしばらく使用しないとモデルをVRAMから解放する。ヘ�
 | FutureWarning | `google.generativeai`（deprecated） | `google.genai` に移行 |
 | exporter.pyでDBが見えない | msgpack形式をjson.loadsで読もうとした | `msgpack.unpackb` でデコード、WAL checkpoint追加 |
 | 二重送信 | SEND連打でDBに同一発言が複数記録 | `sending` フラグでボタン非活性化、送信後自動クリア |
+| GPTが400（Issue #23） | reasoning付与は `^gpt-5`、temperature除外は `^gpt-5.5` と判定粒度が非対称で、`gpt-5.4` に `temperature` を送っていた | capability profileを `openai_gpt.py` に集約、未登録モデルはfail-closed |
+| 400の原因が読めない | `raise_for_status()` がresponse bodyを捨て、httpxの `Client error '400 Bad Request'` だけがUIに出ていた | `parse_openai_error()` で status/message/type/param/code をwhitelist抽出 |
 
 ---
 
