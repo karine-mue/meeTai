@@ -6,11 +6,14 @@ model によって送信できる optional parameter が変わる（reasoning mo
 app.py 側に regex を散らすと、片方だけ更新された結果 400 になる。
 
 新しい model を追加するときに触るのは `_CAPABILITY_PROFILES` と
-`tests/test_openai_gpt.py` の 2 箇所だけ。
+`tests/test_openai_gpt.py` の 2 箇所だけ。snapshot（`gpt-5.4-2026-03-05`）は
+自動で base の profile を継承するが、variant（`gpt-5.4-pro` 等）は capability が
+base と異なるため 1 行ずつ明示登録する。登録のない名前は fail-closed。
 """
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -34,7 +37,20 @@ DEFAULT_GPT_MODEL = "gpt-5.4"
 # 設定ミスと区別できないため、コードを触る手間を意図的に残している。
 REASONING_MIN_OUTPUT_TOKENS = 16384
 
-_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high"})
+# reasoning effort の許容値は model ごとに違う。共有定数にすると 1 モデルの
+# 実測値が他モデルへ黙って伝播するため、profile ごとに独立して定義する。
+#
+# whitelist の外し方は非対称で、広すぎる方が危険:
+#   - 広すぎる → 未対応値をそのまま送って 400（この PR が直している不具合そのもの）
+#   - 狭すぎる → default_reasoning_effort へ退避するだけ（400 にはならない）
+# よって未検証の model には保守的な集合を当てる。
+_EFFORTS_GPT_5_4 = frozenset({"none", "low", "medium", "high", "xhigh"})
+_EFFORTS_GPT_5_4_PRO = frozenset({"medium", "high", "xhigh"})
+
+# gpt-5 / gpt-5.5 の許容値は誰も現行仕様と突き合わせていない。low/medium/high は
+# reasoning model でほぼ共通なのでこれだけを許可し、none / minimal / xhigh は
+# 検証できるまで意図的に除外している（除外側の失敗は既定値への退避で済む）。
+_EFFORTS_UNVERIFIED = frozenset({"low", "medium", "high"})
 
 # error.message は provider 由来のテキストなので表示可としつつ、
 # 長大な本文がそのまま UI / log に流れないよう頭を切る。
@@ -56,44 +72,71 @@ class OpenAIModelCapabilities:
 # 未知の model は fail-closed: 必須 field だけ送り、optional parameter は付けない。
 UNKNOWN_MODEL_CAPABILITIES = OpenAIModelCapabilities()
 
-_GPT5_REASONING = OpenAIModelCapabilities(
-    supports_reasoning=True,
-    supports_temperature=False,
-    supported_reasoning_efforts=_REASONING_EFFORTS,
-    default_reasoning_effort="high",
-    min_output_tokens=REASONING_MIN_OUTPUT_TOKENS,
-)
+def _reasoning(efforts: frozenset, default: str = "high") -> OpenAIModelCapabilities:
+    return OpenAIModelCapabilities(
+        supports_reasoning=True,
+        supports_temperature=False,
+        supported_reasoning_efforts=efforts,
+        default_reasoning_effort=default,
+        min_output_tokens=REASONING_MIN_OUTPUT_TOKENS,
+    )
 
-_GPT4_CHAT = OpenAIModelCapabilities(
+
+_CHAT = OpenAIModelCapabilities(
     supports_reasoning=False,
     supports_temperature=True,
 )
 
+# variant（-pro, -mini 等）は base と capability が違うため、1 行ずつ明示登録する。
+# 未登録の名前は継承せず fail-closed になる。
 _CAPABILITY_PROFILES: dict[str, OpenAIModelCapabilities] = {
-    "gpt-5": _GPT5_REASONING,
-    "gpt-5.4": _GPT5_REASONING,
-    "gpt-5.5": _GPT5_REASONING,
-    "gpt-4o": _GPT4_CHAT,
-    "gpt-4.1": _GPT4_CHAT,
+    # gpt-5.4 / gpt-5.4-pro の effort は現行仕様と突き合わせ済み。
+    # pro は low 以下を持たないため base とは別 profile。
+    "gpt-5.4": _reasoning(_EFFORTS_GPT_5_4),
+    "gpt-5.4-pro": _reasoning(_EFFORTS_GPT_5_4_PRO),
+    # 以下 2 つの effort は未検証（_EFFORTS_UNVERIFIED のコメント参照）。
+    # temperature 非対応は commit 263456e の時点で判明していた挙動。
+    "gpt-5": _reasoning(_EFFORTS_UNVERIFIED),
+    "gpt-5.5": _reasoning(_EFFORTS_UNVERIFIED),
+    # non-reasoning chat model。temperature を受け付ける。
+    "gpt-4o": _CHAT,
+    "gpt-4o-mini": _CHAT,
+    "gpt-4.1": _CHAT,
+    "gpt-4.1-mini": _CHAT,
 }
+
+# snapshot suffix は日付（gpt-5.4-2026-03-05）。variant 名（gpt-5.4-pro）と
+# 区別するため、日付形式のときだけ base の profile を継承する。
+_SNAPSHOT_NAME = re.compile(r"^(?P<base>.+)-\d{4}-\d{2}-\d{2}$")
 
 
 def resolve_capabilities(model: str) -> OpenAIModelCapabilities:
     """model 名から capability profile を引く。
 
-    snapshot 名（`gpt-5.4-2026-03-05`）を base model と同じ profile に解決するため、
-    prefix match は `-` 区切りの場合のみ許可する。この境界条件により、
-    未登録の `gpt-5.6` は `gpt-5` に吸われず unknown 扱いになり、
-    「名前が gpt-5 で始まる」だけの理由で optional parameter を送ることがない。
+    解決は「完全一致 → 日付 suffix を落として完全一致 → unknown」の 3 段。
+    prefix match を使わないのは、snapshot と variant を区別できないため:
+
+        gpt-5.4-2026-03-05  → snapshot。gpt-5.4 と同じ capability
+        gpt-5.4-pro         → 別 variant。effort の許容値が gpt-5.4 と異なる
+
+    「gpt-5.4- で始まれば gpt-5.4」という規則ではこの 2 つが同じ profile に
+    落ちてしまい、pro へ未対応の effort を送りうる。日付形式かどうかで
+    判定することで、未登録の variant（gpt-5.6 や未知の -pro 系）は
+    継承されず fail-closed になる。
     """
     name = (model or "").strip()
     if not name:
         return UNKNOWN_MODEL_CAPABILITIES
 
-    # 長い prefix を優先（gpt-5.4 が gpt-5 に負けないようにする）
-    for prefix in sorted(_CAPABILITY_PROFILES, key=len, reverse=True):
-        if name == prefix or name.startswith(f"{prefix}-"):
-            return _CAPABILITY_PROFILES[prefix]
+    profile = _CAPABILITY_PROFILES.get(name)
+    if profile is not None:
+        return profile
+
+    snapshot = _SNAPSHOT_NAME.match(name)
+    if snapshot:
+        # variant の snapshot（gpt-5.4-pro-2026-03-05）も base 名で引ける
+        return _CAPABILITY_PROFILES.get(snapshot.group("base"), UNKNOWN_MODEL_CAPABILITIES)
+
     return UNKNOWN_MODEL_CAPABILITIES
 
 

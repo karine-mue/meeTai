@@ -47,14 +47,6 @@ def test_gpt_5_4_sends_reasoning_and_omits_temperature():
     assert "temperature" not in body
 
 
-def test_gpt_5_4_snapshot_uses_same_profile():
-    snapshot = build("gpt-5.4-2026-03-05")
-    base = build("gpt-5.4")
-    assert snapshot["reasoning"] == base["reasoning"]
-    assert "temperature" not in snapshot
-    assert resolve_capabilities("gpt-5.4-2026-03-05") is resolve_capabilities("gpt-5.4")
-
-
 def test_gpt_5_5_sends_only_profiled_parameters():
     body = build("gpt-5.5")
     assert body["reasoning"] == {"effort": "high"}
@@ -78,16 +70,55 @@ def test_gpt_4o_is_non_reasoning_and_takes_temperature():
     assert body["temperature"] == 0
 
 
-def test_gpt_4o_snapshot_and_mini_use_same_profile():
-    for model in ("gpt-4o-2024-08-06", "gpt-4o-mini"):
-        assert resolve_capabilities(model) is resolve_capabilities("gpt-4o")
-
-
-def test_longest_prefix_wins_over_shorter_one():
-    """gpt-5.4 が gpt-5 profile に吸われない。"""
-    assert resolve_capabilities("gpt-5.4") is resolve_capabilities("gpt-5.5")
-    assert resolve_capabilities("gpt-5") is not UNKNOWN_MODEL_CAPABILITIES
+def test_gpt_5_takes_no_temperature():
     assert "temperature" not in build("gpt-5")
+    assert resolve_capabilities("gpt-5") is not UNKNOWN_MODEL_CAPABILITIES
+
+
+# ==========
+# snapshot と variant の区別
+# ==========
+@pytest.mark.parametrize(
+    "snapshot,base",
+    [
+        ("gpt-5.4-2026-03-05", "gpt-5.4"),
+        ("gpt-5.4-pro-2026-03-05", "gpt-5.4-pro"),
+        ("gpt-4o-2024-08-06", "gpt-4o"),
+        ("gpt-4o-mini-2024-07-18", "gpt-4o-mini"),
+    ],
+)
+def test_date_suffix_is_treated_as_snapshot_of_base(snapshot, base):
+    assert resolve_capabilities(snapshot) is resolve_capabilities(base)
+
+
+def test_gpt_5_4_snapshot_body_matches_base():
+    snapshot = build("gpt-5.4-2026-03-05")
+    base = build("gpt-5.4")
+    assert snapshot["reasoning"] == base["reasoning"]
+    assert "temperature" not in snapshot
+
+
+def test_pro_variant_is_not_a_snapshot_of_base():
+    """gpt-5.4-pro は gpt-5.4 と effort の許容値が違うので別 profile。"""
+    pro = resolve_capabilities("gpt-5.4-pro")
+    base = resolve_capabilities("gpt-5.4")
+    assert pro is not base
+    assert pro is not UNKNOWN_MODEL_CAPABILITIES
+    assert pro.supported_reasoning_efforts != base.supported_reasoning_efforts
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4-pro-max", "gpt-5.4-turbo", "gpt-5.4-preview"])
+def test_unregistered_variant_does_not_inherit_base(model):
+    """日付以外の suffix は継承させない（prefix match だと吸われていた）。"""
+    assert resolve_capabilities(model) is UNKNOWN_MODEL_CAPABILITIES
+    body = build(model)
+    assert "reasoning" not in body and "temperature" not in body
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4-2026-3-5", "gpt-5.4-202603-05", "gpt-5.4-v2"])
+def test_malformed_date_suffix_is_not_a_snapshot(model):
+    """日付形式でない suffix を snapshot と誤認しない。"""
+    assert resolve_capabilities(model) is UNKNOWN_MODEL_CAPABILITIES
 
 
 # ==========
@@ -158,16 +189,57 @@ def test_reasoning_effort_defaults_to_high_when_unset():
     assert build("gpt-5.4")["reasoning"] == {"effort": "high"}
 
 
-def test_reasoning_effort_env_is_honoured():
-    body = build("gpt-5.4", GPT_REASONING_EFFORT="low")
-    assert body["reasoning"] == {"effort": "low"}
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh"])
+def test_gpt_5_4_forwards_every_supported_effort(effort):
+    """gpt-5.4 の許容値は none / low / medium / high / xhigh。"""
+    assert build("gpt-5.4", GPT_REASONING_EFFORT=effort)["reasoning"] == {"effort": effort}
 
 
-@pytest.mark.parametrize("value", ["extreme", "HIGH ", ""])
-def test_reasoning_effort_is_normalised_or_falls_back(value):
-    """profile 外の値を素通しして 400 にしない。"""
-    body = build("gpt-5.4", GPT_REASONING_EFFORT=value)
-    assert body["reasoning"]["effort"] in {"high"}
+@pytest.mark.parametrize("effort", ["minimal", "extreme", "reasoning", "0"])
+def test_gpt_5_4_does_not_forward_unsupported_effort(effort):
+    """minimal は gpt-5.4 では未対応。素通しすると 400 になる。"""
+    body = build("gpt-5.4", GPT_REASONING_EFFORT=effort)
+    assert body["reasoning"] == {"effort": "high"}
+    assert body["reasoning"]["effort"] != effort
+
+
+@pytest.mark.parametrize("effort", ["medium", "high", "xhigh"])
+def test_gpt_5_4_pro_forwards_its_supported_efforts(effort):
+    assert build("gpt-5.4-pro", GPT_REASONING_EFFORT=effort)["reasoning"] == {"effort": effort}
+
+
+@pytest.mark.parametrize("effort", ["none", "low", "minimal"])
+def test_gpt_5_4_pro_falls_back_on_efforts_it_lacks(effort):
+    """pro は low 以下を持たない。base で有効な値でも送らない。"""
+    body = build("gpt-5.4-pro", GPT_REASONING_EFFORT=effort)
+    assert body["reasoning"] == {"effort": "high"}
+
+
+def test_pro_and_base_differ_on_the_same_env_value():
+    """同じ env でも profile ごとに結果が変わることを 1 本で示す。"""
+    assert build("gpt-5.4", GPT_REASONING_EFFORT="low")["reasoning"] == {"effort": "low"}
+    assert build("gpt-5.4-pro", GPT_REASONING_EFFORT="low")["reasoning"] == {"effort": "high"}
+
+
+@pytest.mark.parametrize("value,expected", [("HIGH ", "high"), (" XHigh", "xhigh"), ("", "high")])
+def test_reasoning_effort_is_normalised(value, expected):
+    assert build("gpt-5.4", GPT_REASONING_EFFORT=value)["reasoning"] == {"effort": expected}
+
+
+def test_unverified_profiles_keep_a_conservative_effort_set():
+    """gpt-5 / gpt-5.5 は未検証のため none / xhigh を許可しない（400 側に倒さない）。"""
+    for model in ("gpt-5", "gpt-5.5"):
+        caps = resolve_capabilities(model)
+        assert caps.supported_reasoning_efforts == frozenset({"low", "medium", "high"})
+        for effort in ("none", "xhigh", "minimal"):
+            assert build(model, GPT_REASONING_EFFORT=effort)["reasoning"] == {"effort": "high"}
+
+
+def test_every_profile_default_is_within_its_own_supported_set():
+    """default が許容集合の外にあると、退避先そのものが 400 になる。"""
+    for model in ("gpt-5", "gpt-5.4", "gpt-5.4-pro", "gpt-5.5"):
+        caps = resolve_capabilities(model)
+        assert caps.default_reasoning_effort in caps.supported_reasoning_efforts
 
 
 def test_reasoning_effort_ignored_for_non_reasoning_model():

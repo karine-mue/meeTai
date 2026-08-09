@@ -242,7 +242,27 @@ pytest
 **OpenAIの送信パラメータは `openai_gpt.py` に集約：**  
 モデルによって送れる optional parameter が変わる（GPT-5系reasoning modelは `temperature` を受け付けず400になる）。判定は `_CAPABILITY_PROFILES` の1箇所だけにあり、`app.py` 側に条件分岐を置かない。モデル追加時に触るのはこの表と対応するテストのみ。
 
-未登録のモデル名は **fail-closed**（必須fieldのみ送信、`reasoning`・`temperature` を付けない）で扱う。「名前が `gpt-5` で始まる」だけの理由でパラメータを送らないため、将来の `gpt-5.x` で同じ400が再発しない。snapshot名（`gpt-5.4-2026-03-05`）は `-` 区切りのprefix matchでbase modelのprofileに解決される。
+未登録のモデル名は **fail-closed**（必須fieldのみ送信、`reasoning`・`temperature` を付けない）で扱う。「名前が `gpt-5` で始まる」だけの理由でパラメータを送らないため、将来の `gpt-5.x` で同じ400が再発しない。
+
+**snapshotとvariantを区別する：**  
+profile解決は「完全一致 → 日付suffixを落として完全一致 → unknown」の3段で、prefix matchは使わない。
+
+| モデル名 | 解決先 | 理由 |
+|---|---|---|
+| `gpt-5.4-2026-03-05` | `gpt-5.4` | 日付suffix = snapshot。capabilityは同じ |
+| `gpt-5.4-pro` | `gpt-5.4-pro`（独立profile） | variant。reasoning effortが `medium`/`high`/`xhigh` のみでbaseと異なる |
+| `gpt-5.4-pro-2026-03-05` | `gpt-5.4-pro` | variantのsnapshot |
+| `gpt-5.4-turbo` 等の未登録variant | unknown（fail-closed） | 継承させない |
+
+「`gpt-5.4-` で始まればbaseと同じ」という規則ではsnapshotとvariantが同じprofileに落ち、`gpt-5.4-pro` へ未対応の effort を送りうる。variantは1行ずつ明示登録する。
+
+**reasoning effortのwhitelistは狭い側に倒す：**  
+許容値はmodelごとに独立して定義する（共有定数にすると1モデルの実測値が他モデルへ黙って伝播する）。外し方は非対称で、**広すぎる方が危険**。
+
+- 広すぎる → 未対応値をそのまま送って400（Issue #23と同じ不具合）
+- 狭すぎる → `default_reasoning_effort` へ退避するだけで400にはならない
+
+`gpt-5.4` / `gpt-5.4-pro` は現行仕様と突き合わせ済み。`gpt-5` / `gpt-5.5` は未検証なので `low`/`medium`/`high` のみ許可し、`none`/`minimal`/`xhigh` は検証できるまで除外している。
 
 **reasoning modelの `max_output_tokens`（明示設定を上書きする）：**  
 reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さいとreasoningだけで使い切り、本文が1文字も返らないまま `status=incomplete` / `reason=max_output_tokens` になる。profileの下限（`REASONING_MIN_OUTPUT_TOKENS` = 16384）まで自動で引き上げる。
