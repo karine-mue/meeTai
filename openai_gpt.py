@@ -299,8 +299,9 @@ class OpenAIRequestError(RuntimeError):
 # Capability fallback
 # ==========
 # profile が実際の model 仕様より広い場合、400 の error.param が「送ってはいけない
-# parameter」を名指ししてくる。その parameter を落として 1 度だけ再送することで、
-# profile 未整備の model でも応答を得られるようにする。
+# parameter」を名指ししてくる。その parameter を落として再送することで、profile
+# 未整備の model でも応答を得られるようにする。再送は MAX_CAPABILITY_FALLBACKS
+# 回（= 落とせる key の数）まで。
 #
 # 400 は推論前に弾かれるので再送コストはほぼ無い（429 / 5xx では再送しない）。
 #
@@ -325,8 +326,20 @@ _UNSUPPORTED_PARAM_IN_MESSAGE = re.compile(r"[Uu]nsupported parameter: '(?P<para
 logger = logging.getLogger(__name__)
 
 
-def droppable_param(info: OpenAIErrorInfo, body: Mapping[str, Any]) -> Optional[str]:
-    """400 が「未対応 optional parameter」由来なら、落とすべき body key を返す。
+@dataclass(frozen=True)
+class DroppableParam:
+    """provider が拒否した parameter と、実際に body から外す top-level key。
+
+    この 2 つは一致しないことがある（`reasoning.effort` を拒否されても外すのは
+    `reasoning` object 全体）。profile の直し方が変わるため、両方を保持する。
+    """
+
+    rejected: str
+    key: str
+
+
+def droppable_param(info: OpenAIErrorInfo, body: Mapping[str, Any]) -> Optional[DroppableParam]:
+    """400 が「未対応 optional parameter」由来なら、拒否名と落とす key の組を返す。
 
     再送してよい条件を全て満たさない限り None を返す（= 呼び出し側は素直に
     例外を上げる）。429 / 5xx / 認証エラーはここで弾かれる。
@@ -341,25 +354,49 @@ def droppable_param(info: OpenAIErrorInfo, body: Mapping[str, Any]) -> Optional[
     if name is None:
         return None
 
-    key = _DROPPABLE_PARAMS.get(name.strip())
+    rejected = name.strip()
+    key = _DROPPABLE_PARAMS.get(rejected)
     # body に無いものは落とせない（同じ 400 で無限に再送するのを防ぐ）
     if key is None or key not in body:
         return None
-    return key
+    return DroppableParam(rejected=rejected, key=key)
 
 
-def drop_unsupported_param(body: dict[str, Any], key: str) -> None:
+def _fallback_remedy(target: DroppableParam, sent: Optional[str]) -> str:
+    """profile の直し方を WARNING 内で指示する。
+
+    拒否名と削除 key が違う場合（reasoning.effort）、`reasoning` 全体を落とした
+    ことだけを見て supports_reasoning を切ると過剰修正になる。実際に必要なのは
+    supported_reasoning_efforts を狭めることなので、そこを明示する。
+    """
+    if target.rejected == target.key:
+        return (
+            f"the profile claims {target.key!r} is supported but the API rejected it; "
+            f"turn the corresponding capability off for this model"
+        )
+    return (
+        f"the API rejected {target.rejected!r} (sent {sent!r}), not {target.key!r} itself -- "
+        f"remove {sent!r} from supported_reasoning_efforts rather than clearing "
+        f"supports_reasoning. This retry ran without {target.key!r}, so the API default was used"
+    )
+
+
+def drop_unsupported_param(body: dict[str, Any], target: DroppableParam) -> None:
     """未対応 parameter を body から外し、profile 修正が必要なことを WARNING で残す。
 
     profile（_CAPABILITY_PROFILES）は書き換えない。実行時に書き換えると
     プロセスごとに状態が分岐し、ファイルの内容と一致しなくなるため。
     運用者が profile を直すまで、この WARNING が毎回出続けるのが正しい状態。
     """
-    body.pop(key, None)
+    reasoning = body.get("reasoning")
+    sent_effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+
+    body.pop(target.key, None)
     logger.warning(
-        "openai capability fallback: dropped %r for model %r and retried. "
-        "The profile in openai_gpt.py claims this parameter is supported but the API "
-        "rejected it -- update _CAPABILITY_PROFILES so this is not rediscovered at runtime.",
-        key,
+        "openai capability fallback: model %r rejected %r, dropped %r from the request "
+        "and retried. Update _CAPABILITY_PROFILES in openai_gpt.py -- %s.",
         body.get("model"),
+        target.rejected,
+        target.key,
+        _fallback_remedy(target, sent_effort),
     )
