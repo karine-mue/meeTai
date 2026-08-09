@@ -20,9 +20,12 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from openai_gpt import (
+    MAX_CAPABILITY_FALLBACKS,
     OpenAIErrorInfo,
     OpenAIRequestError,
     build_gpt_request,
+    droppable_param,
+    drop_unsupported_param,
     parse_openai_error,
 )
 from session_archive import (
@@ -376,18 +379,29 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
         max_output_tokens=max_tokens,
     )
     async with _gpt_http_client() as client:
-        r = await client.post(
-            "https://api.openai.com/v1/responses",
-            headers={
-                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=120.0,
-        )
-        # raise_for_status() は body を捨てるため、error JSON を先に構造化する
-        if r.is_error:
-            raise OpenAIRequestError(parse_openai_error(r.status_code, r.text))
+        for attempt in range(MAX_CAPABILITY_FALLBACKS + 1):
+            r = await client.post(
+                "https://api.openai.com/v1/responses",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=120.0,
+            )
+            if not r.is_error:
+                break
+
+            # raise_for_status() は body を捨てるため、error JSON を先に構造化する
+            info = parse_openai_error(r.status_code, r.text)
+
+            # profile が実仕様より広かった場合のみ、未対応 parameter を落として再送。
+            # 対象外の error（429 / 5xx / 必須 field 起因）はそのまま上げる。
+            param = None if attempt == MAX_CAPABILITY_FALLBACKS else droppable_param(info, body)
+            if param is None:
+                raise OpenAIRequestError(info)
+            drop_unsupported_param(body, param)
+
         data = r.json()
     status = data.get("status")
     content = "".join(

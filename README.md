@@ -234,6 +234,7 @@ pytest
 |---|---|
 | `tests/test_openai_gpt.py` | model capability profile の解決、request body の組み立て、env優先順位、OpenAI error のパースとredaction |
 | `tests/test_call_gpt.py` | `call_gpt()` のHTTP error変換、`/chat`・`/ask-all` 両経路の診断保持、error発言がarchive/commitされないこと |
+| `tests/test_capability_fallback.py` | 400の `param` に基づく再送、再送してはいけないerror（429/5xx/必須field）、WARNINGの内容とredaction、profileを書き換えないこと |
 
 ---
 
@@ -270,6 +271,21 @@ reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さ�
 **`GPT_MAX_TOKENS` / `LLM_MAX_TOKENS` に16384未満を明示指定しても引き上げられる。** この数値は測定値ではなく heuristic で、根拠として言えるのは「従来の既定4096は失敗域にある（effort=highのreasoningだけで到達する）」「meeTaiの応答はKernel/Diag/Residue構造で短くないため、reasoningを賄った上で本文にも数千token残る必要がある」の2点のみ。適正値はmodel・effort・prompt長で動くので「これ以上なら安全」という閾値は存在せず、「これ未満はほぼ確実に壊れる」側の下限として置いている。
 
 コスト実験などで意図的に小さいbudgetを使いたい場合は `openai_gpt.py` の定数を下げる。env側に逃げ道は用意していない——reasoning modelに小さいbudgetを渡すのは「空応答を受け入れる」判断であり、設定ミスと区別できないため。
+
+**capability fallback（profileが実仕様より広かった場合）：**  
+400の `error.param` は「送ってはいけないparameter」を名指ししてくる。profileが誤って対応と主張していた場合、その parameter を落として再送する。落とす対象は自分が付けた optional parameter（`temperature` / `reasoning`）だけで、`model`・`input`・`instructions`・`max_output_tokens` は必須なので対象外。再送は最大2回（`MAX_CAPABILITY_FALLBACKS`）。
+
+400は推論前に弾かれるので再送コストはほぼゼロ。逆に **429 / 5xx では絶対に再送しない**（推論コストが乗りうる）。再送条件は「HTTP 400」かつ「`type` が `invalid_request_error`」かつ「`param` が落とせるものとして登録済み」かつ「その key が実際にbodyにある」の全てを満たす場合のみ。
+
+**profileは自動書き換えしない。** 実行時に書き換えるとプロセスごとに状態が分岐し、ファイルの内容と一致しなくなる。代わりに標準 `logging` でWARNINGを出す。
+
+```
+WARNING openai_gpt: openai capability fallback: dropped 'temperature' for model 'gpt-4o'
+and retried. The profile in openai_gpt.py claims this parameter is supported but the API
+rejected it -- update _CAPABILITY_PROFILES so this is not rediscovered at runtime.
+```
+
+このWARNINGは **profileを直すまで毎回出続けるのが正しい状態**。logger基盤は未整備だが、WARNINGは `logging.lastResort` により設定なしでもstderrに出るので、基盤の有無に関わらず気づける。
 
 **エラー発言のprefixは `_error_content()` と対：**  
 `_error_response()` の `[error] ` と `agent_node()` の `[{agent}] error: ` は `_error_content()` の判定パターンと対になっている。ここを変えるとエラーが正規のAI発言としてarchive/commitされる（サイレントなログ汚染）。`tests/test_call_gpt.py` で両者を縛っている。

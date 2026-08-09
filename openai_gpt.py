@@ -12,6 +12,7 @@ base と異なるため 1 行ずつ明示登録する。登録のない名前は
 """
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -292,3 +293,73 @@ class OpenAIRequestError(RuntimeError):
     def __init__(self, info: OpenAIErrorInfo):
         super().__init__(format_openai_error(info))
         self.info = info
+
+
+# ==========
+# Capability fallback
+# ==========
+# profile が実際の model 仕様より広い場合、400 の error.param が「送ってはいけない
+# parameter」を名指ししてくる。その parameter を落として 1 度だけ再送することで、
+# profile 未整備の model でも応答を得られるようにする。
+#
+# 400 は推論前に弾かれるので再送コストはほぼ無い（429 / 5xx では再送しない）。
+#
+# 落とすのは自分が付けた optional parameter だけ。model / input / instructions /
+# max_output_tokens は必須なので対象外。
+_DROPPABLE_PARAMS: dict[str, str] = {
+    "temperature": "temperature",
+    "reasoning": "reasoning",
+    # effort の値が未対応でも reasoning object ごと落とす。reasoning: {} が有効か
+    # 保証がないため、API 既定の effort に委ねる方が安全。
+    "reasoning.effort": "reasoning",
+}
+
+# 落とせる body key は temperature / reasoning の 2 つなので、再送は最大 2 回。
+MAX_CAPABILITY_FALLBACKS = 2
+
+# error.param が null で message 側にしか parameter 名が無い場合の保険。
+# 抽出した名前は _DROPPABLE_PARAMS に載っているものだけ採用するため、
+# 誤検出しても temperature / reasoning 以外は落ちない。
+_UNSUPPORTED_PARAM_IN_MESSAGE = re.compile(r"[Uu]nsupported parameter: '(?P<param>[^']+)'")
+
+logger = logging.getLogger(__name__)
+
+
+def droppable_param(info: OpenAIErrorInfo, body: Mapping[str, Any]) -> Optional[str]:
+    """400 が「未対応 optional parameter」由来なら、落とすべき body key を返す。
+
+    再送してよい条件を全て満たさない限り None を返す（= 呼び出し側は素直に
+    例外を上げる）。429 / 5xx / 認証エラーはここで弾かれる。
+    """
+    if info.http_status != 400 or info.type != "invalid_request_error":
+        return None
+
+    name = info.param
+    if name is None:
+        matched = _UNSUPPORTED_PARAM_IN_MESSAGE.search(info.message or "")
+        name = matched.group("param") if matched else None
+    if name is None:
+        return None
+
+    key = _DROPPABLE_PARAMS.get(name.strip())
+    # body に無いものは落とせない（同じ 400 で無限に再送するのを防ぐ）
+    if key is None or key not in body:
+        return None
+    return key
+
+
+def drop_unsupported_param(body: dict[str, Any], key: str) -> None:
+    """未対応 parameter を body から外し、profile 修正が必要なことを WARNING で残す。
+
+    profile（_CAPABILITY_PROFILES）は書き換えない。実行時に書き換えると
+    プロセスごとに状態が分岐し、ファイルの内容と一致しなくなるため。
+    運用者が profile を直すまで、この WARNING が毎回出続けるのが正しい状態。
+    """
+    body.pop(key, None)
+    logger.warning(
+        "openai capability fallback: dropped %r for model %r and retried. "
+        "The profile in openai_gpt.py claims this parameter is supported but the API "
+        "rejected it -- update _CAPABILITY_PROFILES so this is not rediscovered at runtime.",
+        key,
+        body.get("model"),
+    )
