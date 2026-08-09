@@ -28,6 +28,12 @@ def unsupported(param: str, *, message: str = None) -> dict:
     }
 
 
+def _sole_warning(caplog) -> str:
+    records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(records) == 1, f"expected exactly 1 WARNING, got {len(records)}"
+    return records[0].getMessage()
+
+
 def completed_body(text: str = "回答本文") -> dict:
     return {
         "status": "completed",
@@ -369,20 +375,108 @@ async def test_next_call_repeats_the_same_fallback(gpt_env, monkeypatch, scripte
 # 述語の単体 test
 # ==========
 @pytest.mark.parametrize(
-    "param,expected",
+    "param,rejected,key",
     [
-        ("temperature", "temperature"),
-        ("reasoning", "reasoning"),
-        ("reasoning.effort", "reasoning"),
-        ("  temperature  ", "temperature"),
-        ("model", None),
-        ("max_output_tokens", None),
-        ("", None),
+        ("temperature", "temperature", "temperature"),
+        ("reasoning", "reasoning", "reasoning"),
+        ("reasoning.effort", "reasoning.effort", "reasoning"),
+        ("  temperature  ", "temperature", "temperature"),
     ],
 )
-def test_droppable_param_mapping(param, expected):
+def test_droppable_param_keeps_both_names(param, rejected, key):
+    """provider の拒否名と実際に外す key の両方を保持する。"""
+    info = openai_gpt.OpenAIErrorInfo(
+        http_status=400, message="x", type="invalid_request_error", param=param,
+    )
+    body = {"model": "m", "temperature": 0, "reasoning": {"effort": "high"}}
+    target = droppable_param(info, body)
+    assert target.rejected == rejected
+    assert target.key == key
+
+
+@pytest.mark.parametrize("param", ["model", "max_output_tokens", ""])
+def test_droppable_param_rejects_non_droppable(param):
     info = openai_gpt.OpenAIErrorInfo(
         http_status=400, message="x", type="invalid_request_error", param=param or None,
     )
     body = {"model": "m", "temperature": 0, "reasoning": {"effort": "high"}}
-    assert droppable_param(info, body) == expected
+    assert droppable_param(info, body) is None
+
+
+# ==========
+# WARNING が profile の直し方を区別できる（Codex P3-2）
+# ==========
+async def test_effort_rejection_warning_names_both_params(
+    gpt_env, overbroad_profile, scripted_openai, warnings
+):
+    """reasoning.effort 拒否時、拒否名と削除 key の両方が WARNING に出る。
+
+    削除 key（reasoning）しか出ないと、運用者は supports_reasoning を切る方向へ
+    誘導される。実際に必要なのは supported_reasoning_efforts を狭めること。
+    """
+    scripted_openai((400, unsupported("reasoning.effort")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+
+    rendered = _sole_warning(warnings)
+    assert "reasoning.effort" in rendered      # provider が拒否した parameter
+    assert "'reasoning'" in rendered           # 実際に外した key
+    assert "supported_reasoning_efforts" in rendered
+    assert "supports_reasoning" in rendered
+
+
+async def test_effort_rejection_warning_reports_the_value_that_was_sent(
+    gpt_env, overbroad_profile, monkeypatch, scripted_openai, warnings
+):
+    """どの effort 値が拒否されたのか分からないと profile を直せない。"""
+    monkeypatch.setitem(
+        openai_gpt._CAPABILITY_PROFILES, overbroad_profile,
+        openai_gpt.OpenAIModelCapabilities(
+            supports_reasoning=True, supports_temperature=True,
+            supported_reasoning_efforts=frozenset({"xhigh"}),
+            default_reasoning_effort="xhigh",
+            min_output_tokens=openai_gpt.REASONING_MIN_OUTPUT_TOKENS,
+        ),
+    )
+    scripted_openai((400, unsupported("reasoning.effort")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+
+    assert "xhigh" in _sole_warning(warnings)
+
+
+async def test_direct_reasoning_rejection_does_not_suggest_narrowing_efforts(
+    gpt_env, overbroad_profile, scripted_openai, warnings
+):
+    """reasoning 自体を拒否された場合は capability を切るのが正しい。"""
+    scripted_openai((400, unsupported("reasoning")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+
+    rendered = _sole_warning(warnings)
+    assert "supported_reasoning_efforts" not in rendered
+    assert "turn the corresponding capability off" in rendered
+
+
+async def test_temperature_rejection_warning_is_the_simple_form(
+    gpt_env, overbroad_profile, scripted_openai, warnings
+):
+    scripted_openai((400, unsupported("temperature")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+
+    rendered = _sole_warning(warnings)
+    assert "temperature" in rendered
+    assert "supported_reasoning_efforts" not in rendered
+
+
+async def test_effort_and_direct_rejections_produce_different_warnings(
+    gpt_env, overbroad_profile, scripted_openai, warnings
+):
+    """2 つのケースが WARNING で判別できることを 1 本で示す。"""
+    scripted_openai((400, unsupported("reasoning.effort")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+    effort_warning = _sole_warning(warnings)
+
+    warnings.clear()
+    scripted_openai((400, unsupported("reasoning")), (200, completed_body()))
+    await app.call_gpt("ping", "sys", 4096)
+    direct_warning = _sole_warning(warnings)
+
+    assert effort_warning != direct_warning

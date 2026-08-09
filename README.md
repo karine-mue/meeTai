@@ -280,9 +280,20 @@ reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さ�
 **profileは自動書き換えしない。** 実行時に書き換えるとプロセスごとに状態が分岐し、ファイルの内容と一致しなくなる。代わりに標準 `logging` でWARNINGを出す。
 
 ```
-WARNING openai_gpt: openai capability fallback: dropped 'temperature' for model 'gpt-4o'
-and retried. The profile in openai_gpt.py claims this parameter is supported but the API
-rejected it -- update _CAPABILITY_PROFILES so this is not rediscovered at runtime.
+WARNING openai_gpt: openai capability fallback: model 'gpt-4o' rejected 'temperature',
+dropped 'temperature' from the request and retried. Update _CAPABILITY_PROFILES in
+openai_gpt.py -- the profile claims 'temperature' is supported but the API rejected it;
+turn the corresponding capability off for this model.
+```
+
+**providerが拒否したparameterと、実際にbodyから外したkeyは一致しないことがある。** `reasoning.effort` を拒否されても外すのは `reasoning` object全体なので、削除keyだけを見て `supports_reasoning` を切ると過剰修正になる。両方の名前と送信したeffort値をWARNINGに含め、直し方を明示する。
+
+```
+WARNING openai_gpt: openai capability fallback: model 'gpt-5.5' rejected 'reasoning.effort',
+dropped 'reasoning' from the request and retried. Update _CAPABILITY_PROFILES in
+openai_gpt.py -- the API rejected 'reasoning.effort' (sent 'xhigh'), not 'reasoning' itself
+-- remove 'xhigh' from supported_reasoning_efforts rather than clearing supports_reasoning.
+This retry ran without 'reasoning', so the API default was used.
 ```
 
 このWARNINGは **profileを直すまで毎回出続けるのが正しい状態**。logger基盤は未整備だが、WARNINGは `logging.lastResort` により設定なしでもstderrに出るので、基盤の有無に関わらず気づける。

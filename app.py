@@ -397,10 +397,10 @@ async def call_gpt(prompt: str, sys: str, max_tokens: int) -> str:
 
             # profile が実仕様より広かった場合のみ、未対応 parameter を落として再送。
             # 対象外の error（429 / 5xx / 必須 field 起因）はそのまま上げる。
-            param = None if attempt == MAX_CAPABILITY_FALLBACKS else droppable_param(info, body)
-            if param is None:
+            target = None if attempt == MAX_CAPABILITY_FALLBACKS else droppable_param(info, body)
+            if target is None:
                 raise OpenAIRequestError(info)
-            drop_unsupported_param(body, param)
+            drop_unsupported_param(body, target)
 
         data = r.json()
     status = data.get("status")
