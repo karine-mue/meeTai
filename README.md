@@ -244,8 +244,12 @@ pytest
 
 未登録のモデル名は **fail-closed**（必須fieldのみ送信、`reasoning`・`temperature` を付けない）で扱う。「名前が `gpt-5` で始まる」だけの理由でパラメータを送らないため、将来の `gpt-5.x` で同じ400が再発しない。snapshot名（`gpt-5.4-2026-03-05`）は `-` 区切りのprefix matchでbase modelのprofileに解決される。
 
-**reasoning modelの `max_output_tokens`：**  
-reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さいとreasoningだけで使い切り、本文が1文字も返らないまま `status=incomplete` / `reason=max_output_tokens` になる。profileの下限（16384）まで自動で引き上げる。
+**reasoning modelの `max_output_tokens`（明示設定を上書きする）：**  
+reasoning tokenも `max_output_tokens` に含まれるため、budgetが小さいとreasoningだけで使い切り、本文が1文字も返らないまま `status=incomplete` / `reason=max_output_tokens` になる。profileの下限（`REASONING_MIN_OUTPUT_TOKENS` = 16384）まで自動で引き上げる。
+
+**`GPT_MAX_TOKENS` / `LLM_MAX_TOKENS` に16384未満を明示指定しても引き上げられる。** この数値は測定値ではなく heuristic で、根拠として言えるのは「従来の既定4096は失敗域にある（effort=highのreasoningだけで到達する）」「meeTaiの応答はKernel/Diag/Residue構造で短くないため、reasoningを賄った上で本文にも数千token残る必要がある」の2点のみ。適正値はmodel・effort・prompt長で動くので「これ以上なら安全」という閾値は存在せず、「これ未満はほぼ確実に壊れる」側の下限として置いている。
+
+コスト実験などで意図的に小さいbudgetを使いたい場合は `openai_gpt.py` の定数を下げる。env側に逃げ道は用意していない——reasoning modelに小さいbudgetを渡すのは「空応答を受け入れる」判断であり、設定ミスと区別できないため。
 
 **エラー発言のprefixは `_error_content()` と対：**  
 `_error_response()` の `[error] ` と `agent_node()` の `[{agent}] error: ` は `_error_content()` の判定パターンと対になっている。ここを変えるとエラーが正規のAI発言としてarchive/commitされる（サイレントなログ汚染）。`tests/test_call_gpt.py` で両者を縛っている。

@@ -102,6 +102,22 @@ def test_reasoning_model_raises_small_budget_to_floor():
     assert body["max_output_tokens"] == REASONING_MIN_OUTPUT_TOKENS
 
 
+@pytest.mark.parametrize("configured", [1, 512, 4096, REASONING_MIN_OUTPUT_TOKENS - 1])
+def test_floor_overrides_explicitly_configured_budget(configured):
+    """明示設定を意図的に上書きする、という仕様をここで固定する。
+
+    GPT_MAX_TOKENS / LLM_MAX_TOKENS で小さい値を指定しても（app.py の
+    _agent_max_tokens() 経由で max_output_tokens に入る）、reasoning model
+    では下限まで引き上げる。挙動を変えたい場合は
+    openai_gpt.REASONING_MIN_OUTPUT_TOKENS を下げる。根拠は同定数のコメント。
+    """
+    body = build_gpt_request(
+        prompt="ping", instructions="sys", max_output_tokens=configured,
+        env={"OPENAI_MODEL": "gpt-5.4"},
+    )
+    assert body["max_output_tokens"] == REASONING_MIN_OUTPUT_TOKENS
+
+
 def test_reasoning_model_keeps_budget_above_floor():
     body = build_gpt_request(
         prompt="ping", instructions="sys", max_output_tokens=BIG_BUDGET,

@@ -16,9 +16,22 @@ from typing import Any, Mapping, Optional
 
 DEFAULT_GPT_MODEL = "gpt-5.4"
 
-# reasoning model では reasoning token も max_output_tokens に含まれる。
-# budget が小さいと reasoning だけで使い切り、本文が 1 文字も返らないまま
-# status=incomplete / reason=max_output_tokens になるため下限を設ける。
+# reasoning model では reasoning token も max_output_tokens に含まれる。budget が
+# 小さいと reasoning だけで使い切り、本文が 1 文字も返らないまま
+# status=incomplete / reason=max_output_tokens になる。
+#
+# この 16384 は測定値ではなく heuristic。根拠として言えるのは次の 2 点だけ:
+#   - 従来の既定 4096 は失敗域にある（effort=high の reasoning だけで到達する）
+#   - meeTai の応答は Kernel/Diag/Residue 構造で短くないため、reasoning を賄った
+#     うえで本文にも数千 token 残る必要がある
+# 適正値は model・effort・prompt 長で動くので「これ以上なら安全」という閾値は
+# 存在しない。「これ未満はほぼ確実に壊れる」側の下限として置いている。
+#
+# NOTE: GPT_MAX_TOKENS / LLM_MAX_TOKENS に明示指定した値も、reasoning model では
+# この下限まで引き上げる（明示設定の上書き）。コスト実験などで意図的に小さい
+# budget で走らせたい場合は、この定数を下げること。env 側に逃げ道は用意していない
+# ――reasoning model に小さい budget を渡すのは「空応答を受け入れる」判断であり、
+# 設定ミスと区別できないため、コードを触る手間を意図的に残している。
 REASONING_MIN_OUTPUT_TOKENS = 16384
 
 _REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high"})
@@ -129,6 +142,8 @@ def build_gpt_request(
         "model": model,
         "instructions": instructions,
         "input": prompt,
+        # 明示指定より profile の下限が優先される。理由は
+        # REASONING_MIN_OUTPUT_TOKENS のコメント参照。
         "max_output_tokens": max(max_output_tokens, caps.min_output_tokens),
     }
 
