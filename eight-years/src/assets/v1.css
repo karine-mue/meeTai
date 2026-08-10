@@ -1,0 +1,67 @@
+/* ヌイシロ v1（2015-05 〜 2018-09）明色・罫線区切り・角なし */
+
+body { background: #ffffff; }
+.device { background: #ffffff; color: #1c1d1f; }
+
+.statusbar { color: #1c1d1f; background: #ffffff; }
+
+.appbar {
+  flex: 0 0 46px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid #d8d8d8;
+}
+.appbar .logo { font-size: 17px; font-weight: 700; letter-spacing: .10em; }
+.appbar .gear { width: 18px; height: 18px; opacity: .5; }
+
+.profile {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e8e8e8;
+}
+.profile .av { width: 44px; height: 44px; border-radius: 50%; background: #8fa3ad; flex: 0 0 44px; }
+.profile .nm { font-size: 15px; font-weight: 700; }
+.profile .id { font-size: 11px; color: #8a8d91; margin-top: 3px; letter-spacing: .04em; }
+
+.sortbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 16px;
+  padding: 9px 16px;
+  font-size: 12px; color: #8a8d91;
+  border-bottom: 1px solid #e8e8e8;
+}
+.sortbar .on { color: #1c1d1f; font-weight: 700; border-bottom: 2px solid #4b6b7a; padding-bottom: 2px; }
+
+.monthbar {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  font-size: 11px; color: #83868a; letter-spacing: .06em;
+  background: #f3f3f3;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.feed { flex: 1 0 auto; }
+
+.post { padding: 12px 16px 13px; border-bottom: 1px solid #eaeaea; }
+.post .when { font-size: 10.5px; color: #9a9da1; letter-spacing: .04em; }
+.post .body { font-size: 14px; line-height: 1.55; margin-top: 5px; }
+.post .photo { height: 104px; margin-top: 9px; border: 1px solid #dcdcdc; }
+.post .react { margin-top: 8px; font-size: 11px; color: #9a9da1; letter-spacing: .06em; }
+
+.tabbar {
+  margin-top: auto;
+  flex: 0 0 58px;
+  display: flex; align-items: center;
+  border-top: 1px solid #d8d8d8;
+  background: #fafafa;
+}
+.tabbar div {
+  flex: 1; text-align: center; font-size: 10px; color: #9a9da1; letter-spacing: .04em;
+}
+.tabbar div.on { color: #3b5a68; font-weight: 700; }
+.tabbar div i {
+  display: block; width: 15px; height: 15px; margin: 0 auto 4px;
+  border: 1.4px solid currentColor; border-radius: 3px; opacity: .8;
+}
+.tabbar div.on i { background: currentColor; opacity: .18; border-color: #3b5a68; }

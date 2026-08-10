@@ -1,0 +1,121 @@
+/* nuishiro v2（2019-12 〜 2023-03）暗色・角丸カード・セグメントコントロール */
+
+body { background: #131518; }
+.device { background: #131518; color: #e9eaec; }
+
+.statusbar { color: #e9eaec; background: #131518; }
+
+.appbar {
+  flex: 0 0 48px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px;
+}
+.appbar .logo { font-size: 15px; font-weight: 600; letter-spacing: .22em; color: #cfd2d6; }
+.appbar .gear { width: 18px; height: 18px; opacity: .45; }
+
+.profile {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  margin: 2px 14px 12px;
+  padding: 13px 14px;
+  background: #1c1f24;
+  border-radius: 14px;
+}
+.profile .av { width: 42px; height: 42px; border-radius: 13px; background: #4d6b78; flex: 0 0 42px; }
+.profile .nm { font-size: 15px; font-weight: 600; }
+.profile .id { font-size: 11px; color: #7d838b; margin-top: 4px; letter-spacing: .05em; }
+
+.seg {
+  flex: 0 0 auto;
+  display: flex; gap: 2px;
+  margin: 0 14px;
+  padding: 3px;
+  background: #1c1f24;
+  border-radius: 10px;
+}
+.seg span {
+  flex: 1; text-align: center; font-size: 11.5px; padding: 6px 0;
+  color: #7d838b; border-radius: 8px; letter-spacing: .04em;
+}
+.seg span.on { background: #2c313a; color: #e9eaec; font-weight: 600; }
+
+.monthbar {
+  flex: 0 0 auto;
+  padding: 9px 18px 6px;
+  font-size: 10.5px; color: #6e747c; letter-spacing: .14em;
+}
+
+.feed { flex: 1 0 auto; padding: 0 14px; }
+
+.post {
+  background: #1c1f24;
+  border-radius: 14px;
+  padding: 11px 14px 12px;
+  margin-bottom: 7px;
+}
+.post .when { font-size: 10px; color: #757b83; letter-spacing: .06em; }
+.post .body { font-size: 14px; line-height: 1.6; margin-top: 6px; color: #e4e6e9; }
+.post .photo { height: 88px; margin-top: 9px; border-radius: 9px; }
+.post .react { margin-top: 9px; font-size: 11px; color: #757b83; letter-spacing: .08em; }
+
+.tabbar {
+  margin-top: auto;
+  flex: 0 0 60px;
+  display: flex; align-items: center;
+  background: #16191d;
+  border-top: 1px solid #23272d;
+}
+.tabbar div { flex: 1; text-align: center; font-size: 10px; color: #6e747c; letter-spacing: .05em; }
+.tabbar div.on { color: #b9c6cd; font-weight: 600; }
+.tabbar div i {
+  display: block; width: 15px; height: 15px; margin: 0 auto 5px;
+  border: 1.4px solid currentColor; border-radius: 50%; opacity: .75;
+}
+.tabbar div.on i { background: currentColor; opacity: .3; }
+
+/* ---- DM ---- */
+
+.dmbar {
+  flex: 0 0 48px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid #23272d;
+}
+.dmbar .back { width: 9px; height: 9px; border-left: 1.6px solid #9aa1a9; border-bottom: 1.6px solid #9aa1a9; transform: rotate(45deg); }
+.dmbar .peer { font-size: 15px; font-weight: 600; }
+
+/* 実際のメッセージ画面と同じく、吹き出しは下端（入力欄の上）に寄る。 */
+.thread {
+  flex: 1 0 auto;
+  padding: 16px 16px 14px;
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
+.daydiv { text-align: center; font-size: 10px; color: #656b73; letter-spacing: .12em; margin-bottom: 16px; }
+
+.row { display: flex; align-items: flex-end; gap: 7px; margin-bottom: 11px; max-width: 300px; }
+.row .av { width: 30px; height: 30px; border-radius: 10px; background: #6a5f52; flex: 0 0 30px; }
+.bubble {
+  background: #262b31; color: #e4e6e9;
+  border-radius: 4px 15px 15px 15px;
+  padding: 9px 13px; font-size: 14px; line-height: 1.5;
+}
+.bubble.pic { padding: 0; overflow: hidden; }
+.bubble.pic .photo { width: 186px; height: 140px; }
+.row .t { font-size: 9.5px; color: #656b73; padding-bottom: 2px; white-space: nowrap; }
+.row.cont { margin-left: 37px; }
+.read { margin-left: 37px; margin-top: -4px; font-size: 9.5px; color: #656b73; letter-spacing: .06em; }
+
+.composer {
+  margin-top: auto;
+  flex: 0 0 60px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
+  border-top: 1px solid #23272d;
+  background: #16191d;
+}
+.composer .field {
+  flex: 1; height: 34px; border-radius: 17px; background: #1f2329;
+  display: flex; align-items: center; padding: 0 14px;
+  font-size: 12.5px; color: #5c626a;
+}
+.composer .send { width: 26px; height: 26px; border-radius: 50%; background: #2c313a; }

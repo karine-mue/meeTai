@@ -1,0 +1,314 @@
+{
+  "work": {
+    "app_name": "ヌイシロ",
+    "self": "あお",
+    "span": { "from": "2015-04-01", "to": "2023-03-31" },
+    "thread_motif": "軍手",
+    "accounts": { "v1": "ID 4417-08", "v2": "@8261-30" }
+  },
+
+  "screens": [
+    {
+      "index": 1,
+      "kind": "notice",
+      "file": "01_notice.png",
+      "text": [
+        "この人生は生成されたものです。",
+        "ここに映る人物、アカウント、アプリケーション、",
+        "書かれている出来事は、いずれも実在しません。",
+        "",
+        "日付、曜日、端末の状態、ファイルの連番は、",
+        "実在の暦に合わせて内部で整合させてあります。",
+        "",
+        "以降、記録の断片のみが続きます。"
+      ],
+      "footer": "2015 — 2023"
+    },
+
+    {
+      "index": 2,
+      "kind": "feed",
+      "file": "02_IMG_0412.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2015年5月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2015-05-30T23:58",
+        "weekday": "土",
+        "battery": 19,
+        "charging": false,
+        "network": "wifi",
+        "bars": 3,
+        "context": "home",
+        "seq": 412
+      },
+      "posts": [
+        { "at": "2015-05-07T07:48", "weekday": "木", "context": "transit", "text": "連休明けの電車、いつもより空いてる", "photo": null, "reactions": 0 },
+        { "at": "2015-05-13T12:52", "weekday": "水", "context": "school", "text": "弁当箱の蓋が閉まらないまま持ってきた", "photo": "plain", "reactions": 2 },
+        { "at": "2015-05-21T18:30", "weekday": "木", "context": "out", "text": "軍手が片っぽ落ちてた", "photo": "glove", "reactions": 1, "thread": true },
+        { "at": "2015-05-30T23:44", "weekday": "土", "context": "home", "text": "明日の分をまだやってない", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 3,
+      "kind": "feed",
+      "file": "03_IMG_0631.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2016年2月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2016-02-28T01:20",
+        "weekday": "日",
+        "battery": 88,
+        "charging": true,
+        "network": "wifi",
+        "bars": 3,
+        "context": "home",
+        "seq": 631
+      },
+      "posts": [
+        { "at": "2016-02-03T07:41", "weekday": "水", "context": "transit", "text": "二本前のが遅れてるらしい", "photo": null, "reactions": 0 },
+        { "at": "2016-02-12T12:52", "weekday": "金", "context": "school", "text": "購買、同じパンしか残ってない", "photo": "plain", "reactions": 3 },
+        { "at": "2016-02-20T16:02", "weekday": "土", "context": "out", "text": "本屋で二時間立ってた", "photo": null, "reactions": 1 },
+        { "at": "2016-02-28T01:12", "weekday": "日", "context": "home", "text": "寝る", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 4,
+      "kind": "feed",
+      "file": "04_IMG_0908.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2016年10月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2016-10-30T14:20",
+        "weekday": "日",
+        "battery": 64,
+        "charging": false,
+        "network": "wifi",
+        "bars": 4,
+        "context": "home",
+        "seq": 908
+      },
+      "posts": [
+        { "at": "2016-10-05T06:58", "weekday": "水", "context": "home", "text": "起きたら電気がついたままだった", "photo": null, "reactions": 0 },
+        { "at": "2016-10-11T22:47", "weekday": "火", "context": "home", "text": "数学のプリントが束で出てきた", "photo": "plain", "reactions": 1 },
+        { "at": "2016-10-19T19:31", "weekday": "水", "context": "out", "text": "またあった 軍手", "photo": "glove", "reactions": 2, "thread": true },
+        { "at": "2016-10-30T14:05", "weekday": "日", "context": "home", "text": "内釜だけ洗って干してある", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 5,
+      "kind": "feed",
+      "file": "05_IMG_1204.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2017年6月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2017-06-25T11:26",
+        "weekday": "日",
+        "battery": 41,
+        "charging": false,
+        "network": "mobile",
+        "bars": 3,
+        "context": "home",
+        "seq": 1204
+      },
+      "posts": [
+        { "at": "2017-06-06T06:12", "weekday": "火", "context": "transit", "text": "始発の一本あと", "photo": null, "reactions": 0 },
+        { "at": "2017-06-14T21:58", "weekday": "水", "context": "out", "text": "棚の位置が変わってる", "photo": "plain", "reactions": 1 },
+        { "at": "2017-06-22T23:41", "weekday": "木", "context": "home", "text": "洗濯機の音が変", "photo": null, "reactions": 0 },
+        { "at": "2017-06-25T11:03", "weekday": "日", "context": "home", "text": "ずっと寝てた", "photo": null, "reactions": 2 }
+      ]
+    },
+
+    {
+      "index": 6,
+      "kind": "feed",
+      "file": "06_IMG_1533.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2018年3月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2018-03-21T09:44",
+        "weekday": "水",
+        "battery": 77,
+        "charging": false,
+        "network": "mobile",
+        "bars": 4,
+        "context": "home",
+        "seq": 1533
+      },
+      "posts": [
+        { "at": "2018-03-02T06:41", "weekday": "金", "context": "transit", "text": "ホームの端まで行くと空いてる", "photo": null, "reactions": 0 },
+        { "at": "2018-03-09T22:12", "weekday": "金", "context": "out", "text": "レジ袋を二重にされた", "photo": null, "reactions": 1 },
+        { "at": "2018-03-17T13:50", "weekday": "土", "context": "home", "text": "ドライヤーが熱風を出さない", "photo": "plain", "reactions": 2 },
+        { "at": "2018-03-21T09:30", "weekday": "水", "context": "home", "text": "祝日だと気づかないで起きた", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 7,
+      "kind": "feed",
+      "file": "07_IMG_1902.png",
+      "ui": "v1",
+      "account": "ID 4417-08",
+      "month_label": "2018年9月",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2018-09-29T20:24",
+        "weekday": "土",
+        "battery": 52,
+        "charging": true,
+        "network": "wifi",
+        "bars": 3,
+        "context": "home",
+        "seq": 1902
+      },
+      "posts": [
+        { "at": "2018-09-04T07:02", "weekday": "火", "context": "transit", "text": "ドアの前に立つ人が毎日同じ", "photo": null, "reactions": 0 },
+        { "at": "2018-09-12T12:40", "weekday": "水", "context": "work", "text": "あたためる列が長い", "photo": "plain", "reactions": 1 },
+        { "at": "2018-09-20T19:55", "weekday": "木", "context": "out", "text": "軍手。柵のところに片方", "photo": "glove", "reactions": 3, "thread": true },
+        { "at": "2018-09-29T20:10", "weekday": "土", "context": "home", "text": "風で窓が鳴ってる", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 8,
+      "kind": "feed",
+      "file": "08_IMG_2411.png",
+      "ui": "v2",
+      "account": "@8261-30",
+      "month_label": "2019.12",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2019-12-28T23:59",
+        "weekday": "土",
+        "battery": 31,
+        "charging": false,
+        "network": "wifi",
+        "bars": 3,
+        "context": "home",
+        "seq": 2411
+      },
+      "posts": [
+        { "at": "2019-12-03T07:11", "weekday": "火", "context": "transit", "text": "ホームの放送が新しくなってる", "photo": null, "reactions": 0 },
+        { "at": "2019-12-11T21:34", "weekday": "水", "context": "out", "text": "傘立てが全部同じビニール傘", "photo": "plain", "reactions": 2 },
+        { "at": "2019-12-18T18:47", "weekday": "水", "context": "out", "text": "軍手あった 今年の", "photo": "glove", "reactions": 1, "thread": true },
+        { "at": "2019-12-28T23:52", "weekday": "土", "context": "home", "text": "録画が容量いっぱいで止まってた", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 9,
+      "kind": "feed",
+      "file": "09_IMG_2903.png",
+      "ui": "v2",
+      "account": "@8261-30",
+      "month_label": "2020.07",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2020-07-30T16:50",
+        "weekday": "木",
+        "battery": 100,
+        "charging": true,
+        "network": "wifi",
+        "bars": 4,
+        "context": "home",
+        "seq": 2903
+      },
+      "posts": [
+        { "at": "2020-07-07T11:20", "weekday": "火", "context": "home", "text": "置き配になってる", "photo": null, "reactions": 1 },
+        { "at": "2020-07-15T13:02", "weekday": "水", "context": "home", "text": "昼に洗濯すると乾く", "photo": null, "reactions": 0 },
+        { "at": "2020-07-21T15:44", "weekday": "火", "context": "home", "text": "同じ角度から同じ屋根を見てる", "photo": "plain", "reactions": 2 },
+        { "at": "2020-07-30T16:38", "weekday": "木", "context": "home", "text": "冷凍庫に保冷剤が二十個ある", "photo": "plain", "reactions": 4 }
+      ]
+    },
+
+    {
+      "index": 10,
+      "kind": "feed",
+      "file": "10_IMG_3388.png",
+      "ui": "v2",
+      "account": "@8261-30",
+      "month_label": "2021.05",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2021-05-29T12:31",
+        "weekday": "土",
+        "battery": 58,
+        "charging": false,
+        "network": "mobile",
+        "bars": 3,
+        "context": "out",
+        "seq": 3388
+      },
+      "posts": [
+        { "at": "2021-05-06T07:26", "weekday": "木", "context": "transit", "text": "乗り換えが一回増えた", "photo": null, "reactions": 0 },
+        { "at": "2021-05-13T20:03", "weekday": "木", "context": "out", "text": "近くの店、閉まるのが早い", "photo": null, "reactions": 1 },
+        { "at": "2021-05-19T22:41", "weekday": "水", "context": "home", "text": "一年くらい軍手を見てない", "photo": null, "reactions": 2, "thread_mention": true },
+        { "at": "2021-05-29T12:15", "weekday": "土", "context": "out", "text": "階段は右側を上がる", "photo": "plain", "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 11,
+      "kind": "feed",
+      "file": "11_IMG_4127.png",
+      "ui": "v2",
+      "account": "@8261-30",
+      "month_label": "2022.08",
+      "sort": "古い順",
+      "device": {
+        "shot_at": "2022-08-28T18:52",
+        "weekday": "日",
+        "battery": 46,
+        "charging": false,
+        "network": "wifi",
+        "bars": 4,
+        "context": "home",
+        "seq": 4127
+      },
+      "posts": [
+        { "at": "2022-08-03T07:22", "weekday": "水", "context": "transit", "text": "上りのホームだけ屋根がない", "photo": null, "reactions": 0 },
+        { "at": "2022-08-11T15:40", "weekday": "木", "context": "out", "text": "軍手。歩道橋の下に片方", "photo": "glove", "reactions": 2, "thread": true },
+        { "at": "2022-08-20T21:12", "weekday": "土", "context": "home", "text": "製氷が追いつかない", "photo": null, "reactions": 1 },
+        { "at": "2022-08-28T18:35", "weekday": "日", "context": "home", "text": "窓を開けると外のほうが暑い", "photo": null, "reactions": 0 }
+      ]
+    },
+
+    {
+      "index": 12,
+      "kind": "dm",
+      "file": "12_IMG_4390.png",
+      "ui": "v2",
+      "account": "@8261-30",
+      "peer": "なつ",
+      "date_label": "2023.03.05 日",
+      "device": {
+        "shot_at": "2023-03-05T12:26",
+        "weekday": "日",
+        "battery": 67,
+        "charging": false,
+        "network": "mobile",
+        "bars": 3,
+        "context": "out",
+        "seq": 4390
+      },
+      "messages": [
+        { "from": "なつ", "at": "2023-03-05T12:02", "weekday": "日", "text": "これ、そっちの階段のとこ", "photo": "glove" },
+        { "from": "なつ", "at": "2023-03-05T12:03", "weekday": "日", "text": "片方だけ落ちてた", "photo": null },
+        { "from": "なつ", "at": "2023-03-05T12:09", "weekday": "日", "text": "まだ撮ってる？", "photo": null }
+      ],
+      "read_at": "2023-03-05T12:11"
+    }
+  ]
+}

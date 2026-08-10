@@ -1,0 +1,174 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>/* 共通：リセット、ステータスバー、写真プレースホルダ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 390px;
+  background: #2a2c2f;
+  font-family: "IPAPGothic", "IPAGothic", "Noto Sans CJK JP", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+/* min-height にしてあるので、中身が溢れれば body の scrollHeight が 844 を超える。
+   shoot.py はそれを溢れ検出に使う。 */
+.device {
+  width: 390px;
+  min-height: 844px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: visible;
+}
+
+/* ---- ステータスバー ---- */
+
+.statusbar {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px 0 20px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.sb-right { display: flex; align-items: center; gap: 6px; }
+.sb-net { font-size: 10px; font-weight: 600; letter-spacing: .04em; opacity: .85; }
+
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 11px; }
+.bars i { width: 3px; border-radius: 1px; display: block; background: currentColor; opacity: .25; }
+.bars i.on { opacity: 1; }
+.bars i:nth-child(1) { height: 4px; }
+.bars i:nth-child(2) { height: 6.3px; }
+.bars i:nth-child(3) { height: 8.6px; }
+.bars i:nth-child(4) { height: 11px; }
+
+.wifi { width: 16px; height: 12px; display: block; }
+
+.batt { display: flex; align-items: center; gap: 4px; }
+.batt-num { font-size: 12px; font-weight: 600; }
+.batt-shell {
+  width: 25px; height: 12.5px;
+  border: 1.3px solid currentColor; border-radius: 3.5px;
+  position: relative; opacity: .55;
+}
+.batt-shell::after {
+  content: ""; position: absolute; right: -3.6px; top: 3.6px;
+  width: 2px; height: 5px; background: currentColor; border-radius: 0 1.5px 1.5px 0;
+}
+.batt-fill { position: absolute; left: 1.2px; top: 1.2px; bottom: 1.2px; border-radius: 2px; background: currentColor; }
+.bolt { width: 9px; height: 12px; display: block; }
+
+/* ---- 写真プレースホルダ（画像生成APIは使わない。単色・グラデーション・図形のみ） ---- */
+
+.photo { position: relative; overflow: hidden; background: #b3b8bd; }
+
+.photo.plain {
+  background: linear-gradient(158deg, #c8ccd1 0%, #adb3b9 46%, #979ea5 100%);
+}
+.photo.plain::after {
+  content: ""; position: absolute; left: 16%; top: 20%;
+  width: 54%; height: 60%;
+  border-radius: 42% 58% 51% 49% / 55% 45% 58% 42%;
+  background: rgba(255, 255, 255, .20);
+  filter: blur(7px);
+}
+
+.photo.glove {
+  background: linear-gradient(155deg, #71757a 0%, #5a5e62 46%, #43464a 100%);
+}
+.photo.glove::before {
+  content: ""; position: absolute; left: 32%; top: 33%;
+  width: 37%; height: 35%;
+  border-radius: 46% 54% 38% 62% / 56% 44% 60% 40%;
+  background: #d8d5cd;
+  transform: rotate(-13deg);
+  box-shadow: 0 4px 9px rgba(0, 0, 0, .32);
+}
+.photo.glove::after {
+  content: ""; position: absolute; left: 45%; top: 50%;
+  width: 17%; height: 17%;
+  border-radius: 52% 48% 44% 56%;
+  background: #ceccc3;
+  transform: rotate(-13deg);
+}
+
+/* ヌイシロ v1（2015-05 〜 2018-09）明色・罫線区切り・角なし */
+
+body { background: #ffffff; }
+.device { background: #ffffff; color: #1c1d1f; }
+
+.statusbar { color: #1c1d1f; background: #ffffff; }
+
+.appbar {
+  flex: 0 0 46px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid #d8d8d8;
+}
+.appbar .logo { font-size: 17px; font-weight: 700; letter-spacing: .10em; }
+.appbar .gear { width: 18px; height: 18px; opacity: .5; }
+
+.profile {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e8e8e8;
+}
+.profile .av { width: 44px; height: 44px; border-radius: 50%; background: #8fa3ad; flex: 0 0 44px; }
+.profile .nm { font-size: 15px; font-weight: 700; }
+.profile .id { font-size: 11px; color: #8a8d91; margin-top: 3px; letter-spacing: .04em; }
+
+.sortbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 16px;
+  padding: 9px 16px;
+  font-size: 12px; color: #8a8d91;
+  border-bottom: 1px solid #e8e8e8;
+}
+.sortbar .on { color: #1c1d1f; font-weight: 700; border-bottom: 2px solid #4b6b7a; padding-bottom: 2px; }
+
+.monthbar {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  font-size: 11px; color: #83868a; letter-spacing: .06em;
+  background: #f3f3f3;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.feed { flex: 1 0 auto; }
+
+.post { padding: 12px 16px 13px; border-bottom: 1px solid #eaeaea; }
+.post .when { font-size: 10.5px; color: #9a9da1; letter-spacing: .04em; }
+.post .body { font-size: 14px; line-height: 1.55; margin-top: 5px; }
+.post .photo { height: 104px; margin-top: 9px; border: 1px solid #dcdcdc; }
+.post .react { margin-top: 8px; font-size: 11px; color: #9a9da1; letter-spacing: .06em; }
+
+.tabbar {
+  margin-top: auto;
+  flex: 0 0 58px;
+  display: flex; align-items: center;
+  border-top: 1px solid #d8d8d8;
+  background: #fafafa;
+}
+.tabbar div {
+  flex: 1; text-align: center; font-size: 10px; color: #9a9da1; letter-spacing: .04em;
+}
+.tabbar div.on { color: #3b5a68; font-weight: 700; }
+.tabbar div i {
+  display: block; width: 15px; height: 15px; margin: 0 auto 4px;
+  border: 1.4px solid currentColor; border-radius: 3px; opacity: .8;
+}
+.tabbar div.on i { background: currentColor; opacity: .18; border-color: #3b5a68; }
+</style></head><body><div class="device">
+  <div class="statusbar"><span>09:44</span><div class="sb-right"><div class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div><span class="sb-net">4G</span><div class="batt"><span class="batt-num">77</span><div class="batt-shell"><div class="batt-fill" style="width:17.2px"></div></div></div></div></div>
+  <div class="appbar"><span class="logo">ヌイシロ</span><svg class="gear" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="2.6"/><circle cx="9" cy="9" r="6.4"/></svg></div>
+  <div class="profile"><div class="av"></div>
+    <div><div class="nm">あお</div><div class="id">ID 4417-08</div></div>
+  </div>
+  <div class="sortbar"><span>新しい順</span><span class="on">古い順</span></div>
+  <div class="monthbar">2018年3月</div>
+  <div class="feed"><div class="post"><div class="when">2018/03/02 (金) 06:41</div><div class="body">ホームの端まで行くと空いてる</div><div class="react">☆ 0</div></div><div class="post"><div class="when">2018/03/09 (金) 22:12</div><div class="body">レジ袋を二重にされた</div><div class="react">☆ 1</div></div><div class="post"><div class="when">2018/03/17 (土) 13:50</div><div class="body">ドライヤーが熱風を出さない</div><div class="photo plain"></div><div class="react">☆ 2</div></div><div class="post"><div class="when">2018/03/21 (水) 09:30</div><div class="body">祝日だと気づかないで起きた</div><div class="react">☆ 0</div></div></div>
+  <div class="tabbar"><div class=""><i></i>記録</div><div class=""><i></i>さがす</div><div class=""><i></i>通知</div><div class="on"><i></i>じぶん</div></div>
+</div></body></html>
